@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.2.0...v1.3.0) (2026-02-28)
+
+### Features
+
+* add SessionStart hook to inject hallucination-prevention framing ([3cd5014](https://github.com/bitflight-devops/hallucination-detector/commit/3cd50149520e7bfd8f46528c28823eff112d372e))
+
 ## [1.2.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.1.3...v1.2.0) (2026-02-28)
 
 ### Features
