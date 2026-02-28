@@ -62,7 +62,7 @@ Any change that alters this stdout shape silently disables the entire hook. Clau
 These rules exist because they were violated in the past. Follow them exactly.
 
 1. **Runtime vs. dev dependency boundary.** The runtime hooks (`scripts/hallucination-audit-stop.cjs`, `scripts/hallucination-framing-session-start.cjs`) MUST have zero `dependencies` — they run on end-user machines. Everything else (utility scripts, tests, CI) can use any `devDependencies` needed.
-2. **Use native libraries, not CLI wrappers.** Do not shell out to CLI tools (`gh`, `git`, `curl`) via `child_process` when a proper Node.js library exists. `@octokit/rest` for GitHub API, `js-yaml` for YAML, etc. Shelling out is fragile, hard to test, and loses type information.
+2. **Use native libraries, not CLI wrappers.** Do not shell out to CLI tools (`gh`, `git`, `curl`) via `child_process` when a proper Node.js library exists. Use `octokit` (full SDK) for GitHub API, `gray-matter` for frontmatter parsing, `yaml` for YAML serialization, etc. Shelling out is fragile, hard to test, and loses type information. Research the best modern library for a task before picking one — prefer recently released, actively maintained packages that cover the most functionality.
 3. **pnpm only.** Use `pnpm add -D` to install packages. Do not use `npm install` or `yarn add`. Run scripts with `pnpm run` or `pnpm exec`.
 4. **devDependencies are not restricted.** The dev environment can have as many packages as needed. Do not artificially constrain dev tooling to match the zero-dependency runtime constraint.
 
@@ -89,7 +89,7 @@ This is the most common type of change. Follow this pattern exactly:
 3. Add tests in `tests/hallucination-audit-stop.test.cjs`:
    - Test positive matches (text that should trigger)
    - Test negative matches (text that should NOT trigger — suppression cases)
-4. Run `npm test` and `npm run lint` before committing
+4. Run `pnpm test` and `pnpm run lint` before committing
 
 ## `.claude/` Directory Structure
 
@@ -352,6 +352,37 @@ When reviewing a batch of new issues (or re-evaluating existing ones), use paral
 4. **Risk/blast radius** — What's the change type, failure mode, test impact, rollback difficulty?
 
 These four dimensions cut across topic groupings. Two issues in the same topic area can have completely different risk profiles (e.g., #15 cognitive bias is `additive/low` while #11 RAG is `external/high`, despite both being "advanced detection").
+
+## Working Process
+
+Every task follows this sequence. Do not skip steps. Do not jump to implementation.
+
+### 1. Understand the problem
+
+Break the task into its constituent parts. What are the inputs, outputs, constraints, and dependencies? What existing code/systems does it touch? Read the relevant files.
+
+### 2. Research how this problem is solved
+
+Search for how other repositories and projects solve the same problem. Find several concrete examples (3+). Use WebSearch, WebFetch, and Explore agents. Look at:
+- Popular open-source projects that face the same challenge
+- npm packages that encapsulate the solution (prefer recent, maintained, feature-rich libraries over writing code ourselves)
+- Existing patterns in this codebase or the claude_skills source repo
+
+### 3. State objectives
+
+Write out the specific objectives the solution must achieve. These are acceptance criteria, not vague goals. Each one must be testable.
+
+### 4. Gap analysis
+
+Compare the research findings against the objectives. Identify gaps — things the research doesn't cover, trade-offs between approaches, risks. If there are gaps, go back to step 2 and research more. Do not proceed with gaps.
+
+### 5. Develop
+
+Only now write code. Follow the strategy that emerged from steps 1–4. Use the libraries and patterns identified in research. Delegate implementation to javascript-pro agents when appropriate.
+
+### 6. Verify
+
+Run lints, tests, and manual checks. Confirm each objective from step 3 is met with evidence, not assertions.
 
 ## Behavioral Rules
 
