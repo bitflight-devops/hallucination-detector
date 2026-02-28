@@ -1,3 +1,9 @@
+## [1.3.2](https://github.com/bitflight-devops/hallucination-detector/compare/v1.3.1...v1.3.2) (2026-02-28)
+
+### Bug Fixes
+
+* collapse keywords array in plugin.json files to satisfy Biome formatter ([376ba04](https://github.com/bitflight-devops/hallucination-detector/commit/376ba042e3e3090d44306197dcf88894c371e9c3))
+
 ## [1.3.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.3.0...v1.3.1) (2026-02-28)
 
 ### Bug Fixes
