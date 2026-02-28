@@ -5,9 +5,8 @@
  * The stop-hook script runs automatically to audit assistant output.
  */
 
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
+const path = require('node:path');
+const fs = require('node:fs');
 
 const __pluginDir = __dirname;
 
@@ -24,7 +23,10 @@ const extractAndStripFrontmatter = (content) => {
     const colonIdx = line.indexOf(':');
     if (colonIdx > 0) {
       const key = line.slice(0, colonIdx).trim();
-      const value = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, '');
+      const value = line
+        .slice(colonIdx + 1)
+        .trim()
+        .replace(/^["']|["']$/g, '');
       frontmatter[key] = value;
     }
   }
@@ -32,7 +34,7 @@ const extractAndStripFrontmatter = (content) => {
   return { frontmatter, content: body };
 };
 
-const HallucinationDetectorPlugin = async ({ client, directory }) => {
+const HallucinationDetectorPlugin = async () => {
   const pluginRoot = path.resolve(__pluginDir, '../..');
   const auditCommandPath = path.join(pluginRoot, 'commands', 'hallucination-audit.md');
 
@@ -64,9 +66,12 @@ ${toolMapping}
     'experimental.chat.system.transform': async (_input, output) => {
       const bootstrap = getBootstrapContent();
       if (bootstrap) {
-        (output.system ||= []).push(bootstrap);
+        if (!output.system) {
+          output.system = [];
+        }
+        output.system.push(bootstrap);
       }
-    }
+    },
   };
 };
 

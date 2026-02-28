@@ -3,14 +3,9 @@ const assert = require('node:assert/strict');
 
 const {
   findTriggerMatches,
-  normalizeForScan,
   stripLowSignalRegions,
   extractTextFromMessageContent,
   getLastAssistantText,
-  hasEvidenceNearby,
-  isIndexWithinQuestion,
-  isQualityScore,
-  hasEnumerationNearby,
   parseJsonl,
 } = require('../scripts/hallucination-audit-stop.cjs');
 
@@ -288,8 +283,7 @@ describe('integration', () => {
 
   it('mixed text flags only speculation, not evidence', () => {
     const text =
-      'I observed error code 127 in the logs. ' +
-      'I think the root cause is a missing binary.';
+      'I observed error code 127 in the logs. ' + 'I think the root cause is a missing binary.';
     const matches = findTriggerMatches(text);
     const kinds = matches.map((m) => m.kind);
     assert.ok(kinds.includes('speculation_language'));
