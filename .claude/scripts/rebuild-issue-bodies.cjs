@@ -82,6 +82,7 @@ async function parseBacklogFile(filePath) {
  *
  * @param {string} extra - The body text following frontmatter.
  * @returns {Record<string, string>} An object containing any of: `researchFirst`, `suggestedLocation`, `files`, and `notes` (where `notes` is the remaining lines joined by newlines).
+ */
 function extractExtraFields(extra) {
   /** @type {Record<string, string>} */
   const fields = {};
