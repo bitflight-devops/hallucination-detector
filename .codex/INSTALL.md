@@ -33,15 +33,17 @@ Adds a stop-hook that blocks speculation, ungrounded causality, and completeness
 
    Add this to `~/.codex/AGENTS.md`:
 
-   ```markdown
+   ````markdown
    ## Hallucination Detector
 
    Before completing any task, run:
-   ```
+
+   ```text
    node ~/.codex/hallucination-detector/scripts/hallucination-audit-stop.cjs
    ```
+
    If the output contains `"decision": "block"`, rewrite your response following the instructions in the `reason` field.
-   ```
+   ````
 
 4. **Restart Codex** (quit and relaunch the CLI).
 

@@ -75,7 +75,7 @@ In Cursor Agent chat, install from marketplace:
 
 Tell Codex:
 
-```
+```text
 Fetch and follow instructions from https://raw.githubusercontent.com/bitflight-devops/hallucination-detector/refs/heads/main/.codex/INSTALL.md
 ```
 
@@ -85,7 +85,7 @@ Fetch and follow instructions from https://raw.githubusercontent.com/bitflight-d
 
 Tell OpenCode:
 
-```
+```text
 Fetch and follow instructions from https://raw.githubusercontent.com/bitflight-devops/hallucination-detector/refs/heads/main/.opencode/INSTALL.md
 ```
 
@@ -163,7 +163,7 @@ Then paste the content to audit.
 
 **Without this plugin:**
 
-```
+```text
 You: "Why is the API returning 500 errors?"
 Claude: "This is probably caused by a database connection timeout.
         The issue is likely due to connection pool exhaustion,
@@ -174,7 +174,7 @@ Claude confidently explains a cause without having verified anything.
 
 **With this plugin:**
 
-```
+```text
 You: "Why is the API returning 500 errors?"
 Claude: [attempts to respond with speculation]
 [BLOCKED by hallucination-detector]
@@ -250,4 +250,4 @@ MIT License — see LICENSE file for details.
 
 ## Support
 
-- **Issues**: https://github.com/bitflight-devops/hallucination-detector/issues
+- **Issues**: [https://github.com/bitflight-devops/hallucination-detector/issues](https://github.com/bitflight-devops/hallucination-detector/issues)

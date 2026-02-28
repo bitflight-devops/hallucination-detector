@@ -40,7 +40,7 @@ The stop-hook runs automatically every time the assistant attempts to complete a
 
 Use the audit command to manually check text:
 
-```
+```text
 use skill tool to load hallucination-detector/hallucination-audit
 ```
 
@@ -72,4 +72,4 @@ git pull
 
 ## Getting Help
 
-- Report issues: https://github.com/bitflight-devops/hallucination-detector/issues
+- Report issues: [https://github.com/bitflight-devops/hallucination-detector/issues](https://github.com/bitflight-devops/hallucination-detector/issues)

@@ -16,6 +16,7 @@ You write production-grade JavaScript. Every decision you make prioritizes corre
 This is the **hallucination-detector** — a Claude Code stop-hook plugin that audits assistant output for speculation, ungrounded causality, pseudo-quantification, and completeness overclaims. The codebase is **CommonJS** (`.cjs` files), uses **Biome** for linting/formatting, **Node.js built-in test runner** (`node:test` + `node:assert/strict`), and **semantic-release** for versioning.
 
 Key files:
+
 - `scripts/hallucination-audit-stop.cjs` — core detection logic
 - `tests/hallucination-audit-stop.test.cjs` — test suite
 - `hooks/hooks.json` — stop hook definition
@@ -25,6 +26,7 @@ Key files:
 ## Operational Protocol
 
 When invoked:
+
 1. Read `package.json`, `biome.json`, and module system setup to understand the project context
 2. Analyze existing code patterns, regex-based detection, and suppression logic
 3. Implement solutions following modern JavaScript best practices
@@ -99,11 +101,13 @@ try { doSomething(); } catch (e) { /* silent */ }
 ## Performance Guidelines
 
 ### Memory Management
+
 - Clean up event listeners, intervals, and subscriptions in teardown
 - Avoid closures that capture large scopes unnecessarily
 - Profile with heap snapshots before optimizing — measure first
 
 ### Runtime Performance
+
 - Use `Map` and `Set` over plain objects when keys are dynamic or non-string
 - Prefer `for...of` over `forEach` in hot paths (avoids function call overhead)
 - Regex patterns should be compiled once at module level, not inside functions
@@ -111,6 +115,7 @@ try { doSomething(); } catch (e) { /* silent */ }
 ## Node.js Specific
 
 ### Stream Processing
+
 ```javascript
 // PREFERRED: Pipeline for stream composition
 const { pipeline } = require('node:stream/promises');
@@ -140,12 +145,15 @@ const { join } = require('node:path');
 ## Development Workflow
 
 ### Phase 1: Analysis
+
 Before writing code, read and understand:
+
 - `package.json` — dependencies, scripts, module type
 - `biome.json` — linter/formatter rules
 - Existing code patterns — regex patterns, suppression logic, category taxonomy
 
 ### Phase 2: Implementation
+
 - Start with the public API surface — define function signatures
 - Implement core logic with pure functions where possible
 - Add error handling at every async boundary
@@ -153,7 +161,9 @@ Before writing code, read and understand:
 - Use `Bash` tool to run linters and tests frequently during development
 
 ### Phase 3: Verification
+
 Before declaring completion:
+
 1. Run `npx biome check .` — zero errors
 2. Run `npm test` — all passing
 3. Review your own code for: unused variables, missing error handling, potential memory leaks
@@ -173,6 +183,7 @@ Before declaring completion:
 ## Communication
 
 When reporting completion, state concretely:
+
 - What was implemented or changed
 - Which files were modified
 - Test results (pass count)

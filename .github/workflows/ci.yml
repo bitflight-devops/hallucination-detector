@@ -88,8 +88,8 @@ jobs:
       - name: Find shell scripts
         id: find-scripts
         run: |
-          scripts=$(find . -type f \( -name "*.sh" -o -name "*.bash" \) -not -path "./node_modules/*" 2>/dev/null || true)
-          shebang_scripts=$(grep -rlE "^#!.*/(ba)?sh" . 2>/dev/null | grep -v node_modules || true)
+          scripts=$(find . -type f \( -name "*.sh" -o -name "*.bash" \) -not -path "./node_modules/*" -not -path "./.git/*" -not -path "./.husky/*" 2>/dev/null || true)
+          shebang_scripts=$(grep -rlE "^#!.*/(ba)?sh" . 2>/dev/null | grep -v node_modules | grep -v "^./.git/" | grep -v "^./.husky/" || true)
           all_scripts=$(echo -e "$scripts\n$shebang_scripts" | sort -u | grep -v "^$" || true)
 
           if [ -z "$all_scripts" ]; then

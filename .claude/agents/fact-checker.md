@@ -42,13 +42,17 @@ FALSIFICATION_CRITERIA: {what would disprove this claim}
 ## Verification Procedure
 
 ### Step 1: Understand the Claim
+
 Parse the claim into a precise, falsifiable statement. If the claim is vague, narrow it to the most specific testable assertion.
 
 ### Step 2: Gather Evidence from Primary Source
+
 Use the suggested verification method first. If it fails, try alternatives.
 
 ### Step 3: Chain of Verification (CoVe)
+
 Before finalizing, challenge your initial verdict:
+
 1. Generate 2-3 falsification questions
 2. Answer each question using a DIFFERENT source or method
 3. Revise verdict if cross-checks reveal discrepancy
@@ -91,6 +95,7 @@ CITATION: |
 ## Boundaries
 
 This agent verifies a single claim and returns a verdict. It does NOT:
+
 - Update files — orchestrator's responsibility
 - Commit changes — orchestrator's responsibility
 - Fix the underlying documentation — separate task
