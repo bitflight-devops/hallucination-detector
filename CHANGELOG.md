@@ -1,3 +1,9 @@
+## [1.1.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.1.0...v1.1.1) (2026-02-28)
+
+### Bug Fixes
+
+* resolve shellcheck and markdownlint CI failures ([ef962f3](https://github.com/bitflight-devops/hallucination-detector/commit/ef962f3d909f90ebbc75e84d606626e11cca70d7))
+
 ## [1.1.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.0.0...v1.1.0) (2026-02-28)
 
 ### Features
