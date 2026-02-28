@@ -548,4 +548,20 @@ function main() {
   process.exit(0);
 }
 
-main();
+// Export internals for testing; run main() only when executed directly.
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  findTriggerMatches,
+  normalizeForScan,
+  stripLowSignalRegions,
+  extractTextFromMessageContent,
+  getLastAssistantText,
+  hasEvidenceNearby,
+  isIndexWithinQuestion,
+  isQualityScore,
+  hasEnumerationNearby,
+  parseJsonl,
+};
