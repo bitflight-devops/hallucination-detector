@@ -54,10 +54,10 @@ jobs:
         run: npx markdownlint-cli2 "**/*.md" "#node_modules"
 
   # =============================================================================
-  # JSON: Prettier formatting
+  # Prettier: YAML + Markdown formatting
   # =============================================================================
-  lint-json:
-    name: JSON / Prettier
+  lint-prettier:
+    name: Prettier
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -70,8 +70,8 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Check JSON formatting
-        run: npx prettier --check "**/*.json" --ignore-path .gitignore
+      - name: Check formatting
+        run: npx prettier --check "**/*.{yml,yaml,md}"
 
   # =============================================================================
   # Shell: shellcheck
@@ -164,7 +164,7 @@ jobs:
     needs:
       - lint-js
       - lint-markdown
-      - lint-json
+      - lint-prettier
       - lint-shell
       - test-node
       - bundle
