@@ -24,13 +24,9 @@ const BENEFIT_MAP = {
 };
 
 /**
- * Normalize an issue title for matching against backlog item names.
- *
- * Strips conventional commit prefixes (feat:, fix:, etc.) and
- * priority prefixes (P0:, P1:, P2:), then lowercases.
- *
- * @param {string} title - Raw issue or backlog item title
- * @returns {string} Lowercased, prefix-stripped title
+ * Normalize an issue or backlog title by removing conventional commit and priority prefixes and converting to lowercase.
+ * @param {string} title - Raw issue or backlog item title.
+ * @returns {string} Title with conventional commit prefixes (e.g. "feat:", "fix:", "chore:", "docs:", "refactor:") and priority prefixes ("P0:", "P1:", "P2:") removed, lowercased and trimmed.
  */
 function normalizeTitle(title) {
   let clean = title.replace(/^(?:feat|fix|chore|docs|refactor):\s*/i, '');

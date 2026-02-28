@@ -31,10 +31,10 @@ const DEFAULT_PRIORITY = 'P2';
 /**
  * Add an issue to a Projects V2 board.
  *
- * @param {import('octokit').Octokit} octokit
- * @param {string} projectId - Projects V2 node ID
- * @param {string} issueNodeId - Issue GraphQL node ID
- * @returns {Promise<string|null>} Project item ID or null on failure
+ * @param {import('octokit').Octokit} octokit - Octokit REST/GraphQL client.
+ * @param {string} projectId - Projects V2 node ID.
+ * @param {string} issueNodeId - Issue GraphQL node ID to add to the project.
+ * @returns {string|null} The created project item ID, or `null` if the item could not be created.
  */
 async function addIssueToProject(octokit, projectId, issueNodeId) {
   const result = await octokit.graphql(
@@ -54,14 +54,13 @@ async function addIssueToProject(octokit, projectId, issueNodeId) {
 }
 
 /**
- * Set a single-select field value on a project item.
+ * Set the value of a single-select field on a Projects V2 item.
  *
- * @param {import('octokit').Octokit} octokit
- * @param {string} projectId
- * @param {string} itemId - Project item node ID
- * @param {string} fieldId - Field node ID
- * @param {string} optionId - Single-select option ID
- * @returns {Promise<void>}
+ * @param {import('octokit').Octokit} octokit - Authenticated Octokit client.
+ * @param {string} projectId - Projects V2 node ID.
+ * @param {string} itemId - Project item node ID.
+ * @param {string} fieldId - Field node ID corresponding to a single-select field.
+ * @param {string} optionId - Single-select option node ID to assign.
  */
 async function setFieldValue(octokit, projectId, itemId, fieldId, optionId) {
   await octokit.graphql(
@@ -93,11 +92,10 @@ async function setFieldValue(octokit, projectId, itemId, fieldId, optionId) {
  */
 
 /**
- * Fetch all single-select fields and their options from a Projects V2 board.
- *
- * @param {import('octokit').Octokit} octokit
- * @param {string} projectId
- * @returns {Promise<ProjectField[]>}
+ * Retrieve single-select fields (including their options) from a Projects V2 board.
+ * @param {import('octokit').Octokit} octokit - Octokit REST/GraphQL client (used for GraphQL queries).
+ * @param {string} projectId - The Projects V2 node ID.
+ * @returns {Promise<ProjectField[]>} An array of single-select project fields; each item includes `id`, `name`, and `options`. Returns an empty array if no matching fields are found.
  */
 async function fetchProjectFields(octokit, projectId) {
   const result = await octokit.graphql(
@@ -130,10 +128,12 @@ async function fetchProjectFields(octokit, projectId) {
 }
 
 /**
- * Build a name→optionId lookup map from a field's options array.
+ * Create a lookup map from option name to option ID that supports case-insensitive and exact-name lookup.
  *
- * @param {FieldOption[]} options
- * @returns {Map<string, string>}
+ * Adds two entries per option: the original option name and an uppercased version of the name, both mapping to the option's node ID.
+ *
+ * @param {FieldOption[]} options - Array of field option objects with `name` and `id` properties.
+ * @returns {Map<string, string>} Map where keys are option names (original and uppercased) and values are option IDs.
  */
 function buildOptionMap(options) {
   const map = new Map();
@@ -257,14 +257,13 @@ async function runDiscoverMode(octokit) {
 // ---------------------------------------------------------------------------
 
 /**
- * Extract priority from issue labels.
+ * Determine the issue's priority from its labels.
  *
- * Supports two label formats:
- *   "priority: P0"  — colon-separated prefix
- *   "P0"            — bare priority label
+ * Recognizes labels in the forms "priority: P0" (or "priority:P0"), bare priorities like "P0"/"P1"/"P2",
+ * and "Idea". If no matching label is found, returns DEFAULT_PRIORITY.
  *
- * @param {Array<{name: string}>} labels
- * @returns {string} Priority string (P0, P1, P2, Idea, etc.), defaults to DEFAULT_PRIORITY
+ * @param {Array<{name: string}>} labels - Array of label objects (each with a `name` property).
+ * @returns {string} Priority string such as "P0", "P1", "P2", or "Idea"; defaults to DEFAULT_PRIORITY when none matched.
  */
 function getPriorityFromLabels(labels) {
   for (const label of labels) {
@@ -296,18 +295,21 @@ function getPriorityFromLabels(labels) {
 // ---------------------------------------------------------------------------
 
 /**
- * Add one issue to the project board and set Priority + Status fields.
+ * Add an issue to the Projects V2 board and set its Priority and Status fields.
  *
- * @param {import('octokit').Octokit} octokit
+ * Determines the issue's priority from its labels, resolves matching single-select option IDs,
+ * adds the issue to the project, and sets the Priority and Status (Backlog) field values.
+ *
+ * @param {import('octokit').Octokit} octokit - Authenticated Octokit REST/GraphQL client.
  * @param {object} opts
- * @param {string} opts.projectId
- * @param {string} opts.priorityFieldId
- * @param {string} opts.statusFieldId
- * @param {Map<string, string>} opts.priorityOptions - name→optionId
- * @param {Map<string, string>} opts.statusOptions - name→optionId
- * @param {{ number: number, title: string, node_id: string, labels: Array<{name: string}> }} opts.issue
- * @param {boolean} opts.dryRun
- * @returns {Promise<boolean>} true if added (or would be added), false on skip/error
+ * @param {string} opts.projectId - Projects V2 node ID.
+ * @param {string} opts.priorityFieldId - Node ID of the Priority single-select field.
+ * @param {string} opts.statusFieldId - Node ID of the Status single-select field.
+ * @param {Map<string, string>} opts.priorityOptions - Map from priority name (case-insensitive) to option node ID.
+ * @param {Map<string, string>} opts.statusOptions - Map from status name (case-insensitive) to option node ID.
+ * @param {{ number: number, title: string, node_id: string, labels: Array<{name: string}> }} opts.issue - Issue object; labels are inspected to derive priority.
+ * @param {boolean} opts.dryRun - If true, log intended actions without making API changes.
+ * @returns {Promise<boolean>} `true` if the issue was added (or would be added in dry-run), `false` on skip or error.
  */
 async function syncIssue(octokit, opts) {
   const {
@@ -358,7 +360,18 @@ async function syncIssue(octokit, opts) {
 // ---------------------------------------------------------------------------
 
 /**
- * @returns {Promise<void>}
+ * Syncs open repository issues to a Projects V2 board, setting Priority and Status fields.
+ *
+ * Supports two modes controlled by command-line flags:
+ * - --discover: prints Projects V2 project IDs and field/option IDs for the repo owner and exits.
+ * - default (or with --dry-run): adds open issues to the configured project and sets priority/status;
+ *   use --dry-run to simulate actions without making changes.
+ *
+ * Reads GITHUB_TOKEN from the environment and exits with an error if missing. In sync mode the
+ * environment variables PROJECT_ID, PRIORITY_FIELD_ID, and STATUS_FIELD_ID must be set; the script
+ * fetches live single-select field options from the project, maps label-derived priorities to
+ * option IDs, and applies the Priority and Status (Backlog) fields to each added issue. Logs a
+ * summary of added items and any errors, and exits the process on fatal configuration errors.
  */
 async function main() {
   const args = process.argv.slice(2);

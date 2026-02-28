@@ -66,11 +66,10 @@ const SEPARATOR_LINE_RE = /^---+\s*$/gm;
 // ---------------------------------------------------------------------------
 
 /**
- * Detect the current priority section from an H2 heading line.
- *
- * @param {string} line
- * @param {string} current
- * @returns {string}
+ * Determine the priority label indicated by an H2 heading line or return the provided fallback.
+ * @param {string} line - A single line of text (typically a Markdown H2) to inspect for a priority heading.
+ * @param {string} current - Fallback priority to return if the line does not contain a recognized heading.
+ * @returns {string} The detected priority (`P0`, `P1`, `P2`, `Ideas`, `Completed`) or `current` if no match is found.
  */
 function detectPriority(line, current) {
   const PRIORITY_PREFIXES = {
@@ -89,10 +88,10 @@ function detectPriority(line, current) {
 }
 
 /**
- * Match a stripped line against known bold-key field prefixes.
+ * Identify whether a line begins with a known bold-key prefix and return the matching prefix and mapped key.
  *
- * @param {string} stripped
- * @returns {{ prefix: string|null, key: string|null }}
+ * @param {string} stripped - A line trimmed of surrounding whitespace.
+ * @returns {{ prefix: string|null, key: string|null }} An object with `prefix` set to the matched FIELD_MAP prefix and `key` to its mapped internal key; both are `null` if no prefix matches.
  */
 function matchFieldPrefix(stripped) {
   for (const [prefix, key] of Object.entries(FIELD_MAP)) {
@@ -104,24 +103,25 @@ function matchFieldPrefix(stripped) {
 }
 
 /**
- * Check whether a stripped line starts with any recognized bold-key field prefix.
+ * Determine whether a trimmed line begins with a recognized bold-key field prefix.
  *
- * @param {string} stripped
- * @returns {boolean}
+ * @param {string} stripped - The line with surrounding whitespace removed.
+ * @returns {boolean} `true` if the line starts with a known bold-prefixed field, `false` otherwise.
  */
 function isBoldKeyLine(stripped) {
   return matchFieldPrefix(stripped).prefix !== null;
 }
 
 /**
- * Collect a multi-line field value from consecutive lines.
+ * Collects a field value that spans multiple lines until the next bold-key field or the end of the input.
  *
- * Reads continuation lines until the next bold-key field or end of body.
+ * Preserves internal blank lines, trims leading/trailing whitespace from the combined result, and returns
+ * the collected text along with the index of the line where collection stopped (the first line that is a new field header or end of lines).
  *
- * @param {string[]} lines
- * @param {number} start - index of the first continuation line (after the field header)
- * @param {string} firstValue - value text from the header line itself
- * @returns {{ value: string, nextIndex: number }}
+ * @param {string[]} lines - All lines of the source text.
+ * @param {number} start - Index of the first continuation line (immediately after the header line).
+ * @param {string} firstValue - Text captured on the header line itself (may be empty).
+ * @returns {{ value: string, nextIndex: number }} value is the collected multiline text; nextIndex is the index at which parsing should resume.
  */
 function collectMultilineValue(lines, start, firstValue) {
   const valueLines = firstValue ? [firstValue] : [];
@@ -141,12 +141,13 @@ function collectMultilineValue(lines, start, firstValue) {
 }
 
 /**
- * Extract bold-key fields from item body text, including multi-line values.
+ * Parse and extract recognized bold-prefixed metadata fields from a register item body into the given item object.
  *
- * Mutates `item` in place with all extracted field values.
+ * Extracted fields (including multi-line values) are written directly onto `item`. The special **Issue** field,
+ * if present, will set `item.issue_number` to the numeric issue id found (without the `#`).
  *
- * @param {string} body
- * @param {Record<string, string>} item
+ * @param {string} body - The raw markdown body of a register item.
+ * @param {Record<string, string>} item - Destination object to receive extracted fields; mutated in place.
  */
 function extractFields(body, item) {
   const lines = body.split('\n');
@@ -185,13 +186,12 @@ function extractFields(body, item) {
 }
 
 /**
- * Parse the original backlog register into structured items.
+ * Parse the original backlog register into an array of structured item objects.
  *
- * Captures both extracted fields AND the full raw body text so that
- * non-standard content (sub-issues, validation steps, citations, etc.)
- * is never lost.
+ * Each item includes extracted metadata fields (e.g., title, priority, description, source, added, status)
+ * and a `full_body` property containing the raw Markdown body for that item so any non-standard content is preserved.
  *
- * @returns {Record<string, string>[]}
+ * @returns {Record<string, string>[]} An array of item objects with parsed fields and a `full_body` string for each item.
  */
 function parseRegister() {
   const text = readFileSync(REGISTER_PATH, 'utf8');
@@ -253,12 +253,10 @@ function fuzzyMatch(key, issueMap) {
 }
 
 /**
- * Match register items to GitHub issues by normalized title.
- * First tries exact normalized match, then fuzzy substring containment.
- *
- * @param {Record<string, string>[]} items
- * @param {object[]} issues
- * @returns {Array<[Record<string, string>, object|null]>}
+ * Map register items to their corresponding GitHub issues by normalized title, falling back to a fuzzy substring match.
+ * @param {Record<string, string>[]} items - Register items; each item must include a `title` property.
+ * @param {object[]} issues - GitHub issue objects; each issue must include a `title` property.
+ * @returns {Array<[Record<string, string>, object|null]>} An array of pairs [item, issue|null] where the second element is the matched issue object or `null` if no match was found.
  */
 function matchItemsToIssues(items, issues) {
   /** @type {Map<string, object>} */
@@ -321,12 +319,10 @@ function findPerItemFile(item) {
 }
 
 /**
- * Read groomed content from a per-item backlog file.
+ * Retrieve the content of the first "## Groomed" section from a backlog file.
  *
- * Extracts everything from the first '## Groomed' heading to end of file.
- *
- * @param {string} filePath
- * @returns {string}
+ * @param {string} filePath - Path to the per-item backlog Markdown file.
+ * @returns {string} The "## Groomed" heading and its following content, trimmed; returns an empty string if no such section exists.
  */
 function readGroomedContent(filePath) {
   const text = readFileSync(filePath, 'utf8');
@@ -335,14 +331,10 @@ function readGroomedContent(filePath) {
 }
 
 /**
- * Extract content from full_body not covered by extracted fields.
+ * Extracts the free-form content from an item's original register body that isn't part of recognized metadata fields.
  *
- * Removes lines already captured by extractFields (bold-key metadata lines)
- * and returns everything else: sub-issues, bullet lists, numbered steps,
- * citations, free-form paragraphs, etc.
- *
- * @param {Record<string, string>} item
- * @returns {string}
+ * @param {Record<string,string>} item - Object produced by parseRegister with a `full_body` property containing the raw register text.
+ * @returns {string} The remaining content (paragraphs, lists, sub-issues, citations, etc.) with separator lines removed and trimmed.
  */
 function extractAdditionalContent(item) {
   const fullBody = item.full_body ?? '';
@@ -450,14 +442,11 @@ function buildStoryBody(item, groomedContent = '') {
 // ---------------------------------------------------------------------------
 
 /**
- * Update the per-item backlog file with an untruncated description.
+ * Update a per-item backlog file's frontmatter description when the provided item's description is longer than the existing one.
  *
- * Uses gray-matter to read frontmatter and yaml (v2) to write it back.
- * Only writes if the new description is longer than the existing one.
- *
- * @param {Record<string, string>} item
- * @param {string|null} [resolvedPath] - Pre-resolved file path (avoids re-scanning)
- * @returns {boolean} true if a file was updated
+ * @param {Record<string, string>} item - Parsed register item; should include `description` and may include `source`.
+ * @param {string|null} [resolvedPath] - Optional full path to the backlog file to update (skips locating the file).
+ * @returns {boolean} `true` if a file was updated, `false` otherwise.
  */
 function updatePerItemFile(item, resolvedPath) {
   const filePath = resolvedPath ?? findPerItemFile(item);
@@ -506,13 +495,13 @@ function updatePerItemFile(item, resolvedPath) {
 // ---------------------------------------------------------------------------
 
 /**
- * Process a single register-item / issue pair.
+ * Process a single register item paired with a GitHub issue: update per-item backlog file if needed and update the issue body to a rebuilt story when an issue is present.
  *
- * @param {Record<string, string>} item
- * @param {object|null} issue
- * @param {import('octokit').Octokit} octokit
- * @param {boolean} dryRun
- * @returns {Promise<{ filesUpdated: number, issuesUpdated: number, noIssue: number }>}
+ * @param {Record<string,string>} item - Parsed register item containing fields like title, description, priority, and other metadata.
+ * @param {object|null} issue - Matching GitHub issue object (or `null` if no match); when present the issue's `number` is used to perform an update.
+ * @param {import('octokit').Octokit} octokit - Authenticated Octokit client used to update GitHub issues.
+ * @param {boolean} dryRun - If true, simulate actions and only log intended changes without writing files or updating issues.
+ * @returns {Promise<{ filesUpdated: number, issuesUpdated: number, noIssue: number }>} Counts of actions performed: `filesUpdated` for per-item files modified, `issuesUpdated` for issues updated, and `noIssue` for items with no matching issue.
  */
 async function processPair(item, issue, octokit, dryRun) {
   const { title } = item;
@@ -554,7 +543,11 @@ async function processPair(item, issue, octokit, dryRun) {
 // ---------------------------------------------------------------------------
 
 /**
- * @returns {Promise<void>}
+ * Orchestrates repairing backlog items from the original register by matching parsed items to open GitHub issues, updating per-item backlog files, and rebuilding issue bodies into a groomed story format.
+ *
+ * When invoked with --dry-run, simulates actions without writing files or updating GitHub issues.
+ *
+ * Exits the process with code 1 if the register file is missing or the GITHUB_TOKEN environment variable is not set.
  */
 async function main() {
   const dryRun = process.argv.includes('--dry-run');

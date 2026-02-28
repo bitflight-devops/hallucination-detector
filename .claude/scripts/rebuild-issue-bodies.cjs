@@ -31,10 +31,10 @@ const BACKLOG_DIR = join(__dirname, '..', 'backlog');
 // ---------------------------------------------------------------------------
 
 /**
- * Parse a backlog per-item markdown file using gray-matter for frontmatter.
+ * Parse a backlog item Markdown file and extract its YAML frontmatter and optional body into a flat data object.
  *
- * @param {string} filePath - Absolute path to the markdown file
- * @returns {Promise<Record<string, string>|null>} Flat data object or null if unparseable
+ * @param {string} filePath - Absolute path to the Markdown file.
+ * @returns {Record<string,string>|null} Object with keys `name`, `description`, `source`, `added`, `priority`, `type`, and optional `extraBody`; `null` if the file cannot be parsed or the frontmatter is invalid.
  */
 async function parseBacklogFile(filePath) {
   const text = await readFile(filePath, 'utf8');
@@ -75,10 +75,13 @@ async function parseBacklogFile(filePath) {
 // ---------------------------------------------------------------------------
 
 /**
- * Extract structured fields from the body text after frontmatter.
+ * Parse structured fields from the Markdown body text that follows YAML frontmatter.
  *
- * @param {string} extra - Body text after frontmatter
- * @returns {Record<string, string>} Extracted fields
+ * The function looks for lines prefixed with **Research first**:, **Suggested location**:, and **Files**:
+ * and extracts their values. Any other non-empty, non-delimiter lines are collected as `notes`.
+ *
+ * @param {string} extra - The body text following frontmatter.
+ * @returns {Record<string, string>} An object containing any of: `researchFirst`, `suggestedLocation`, `files`, and `notes` (where `notes` is the remaining lines joined by newlines).
  */
 function extractExtraFields(extra) {
   /** @type {Record<string, string>} */
@@ -112,10 +115,14 @@ function extractExtraFields(extra) {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a story-format issue body from backlog item data.
+ * Constructs a standardized story-formatted Markdown body for a GitHub issue from a parsed backlog item.
  *
- * @param {Record<string, string>} item - Parsed item from backlog file
- * @returns {string} Formatted issue body
+ * Builds sections including Story, Description, optional Files and Suggested Location, a Context block
+ * (Source, Priority, Added, Research questions), and optional Notes based on the item's fields.
+ *
+ * @param {Record<string,string>} item - Parsed backlog item (expected fields: `name`, `description`, `type`,
+ * `source`, `priority`, `added`, and `extraBody` containing any additional structured notes).
+ * @returns {string} The assembled Markdown issue body.
  */
 function buildStoryBody(item) {
   const title = item.name || 'No title';
@@ -160,7 +167,14 @@ function buildStoryBody(item) {
 // ---------------------------------------------------------------------------
 
 /**
- * @returns {Promise<void>}
+ * Rebuilds GitHub issue bodies from backlog Markdown files and updates matching open issues.
+ *
+ * Reads backlog items from the configured BACKLOG_DIR, matches them to open issues in OWNER/REPO
+ * by normalized title (exact match or substring), and replaces issue bodies with a standardized
+ * story-format body built from each backlog item. Requires GITHUB_TOKEN in the environment;
+ * exits with an error if the token is missing. Operates in read-only mode when run with
+ * --dry-run, skips pull requests and issues already containing a "## Story" section, and logs
+ * counts of updated, skipped, and unmatched issues.
  */
 async function main() {
   const args = process.argv.slice(2);
