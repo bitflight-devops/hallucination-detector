@@ -4,5 +4,8 @@ dist/
 .DS_Store
 .claude/
 !.claude/agents/
+!.claude/rules/
+!.claude/skills/
+!.claude/commands/
 !.claude/CLAUDE.md
 .worktrees/

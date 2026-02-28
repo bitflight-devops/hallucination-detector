@@ -79,6 +79,23 @@ This is the most common type of change. Follow this pattern exactly:
    - Test negative matches (text that should NOT trigger — suppression cases)
 4. Run `npm test` and `npm run lint` before committing
 
+## `.claude/` Directory Structure
+
+```
+.claude/
+├── CLAUDE.md          ← This file (project guide, tracked in git)
+├── agents/            ← Subagent definitions (tracked in git)
+│   ├── code-review.md
+│   ├── doc-drift-auditor.md
+│   ├── fact-checker.md
+│   └── javascript-pro.md
+├── rules/             ← Reusable rule files (tracked in git, created as needed)
+├── skills/            ← Skill definitions (tracked in git, created as needed)
+└── commands/          ← Custom slash commands (tracked in git, created as needed)
+```
+
+The `.gitignore` ignores `.claude/` by default but has explicit exceptions for `agents/`, `rules/`, `skills/`, `commands/`, and `CLAUDE.md`. Other directories under `.claude/` (caches, local state) remain ignored.
+
 ## Subagents (`.claude/agents/`)
 
 | Agent | When to use |
