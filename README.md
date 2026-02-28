@@ -1,5 +1,14 @@
 # Hallucination Detector
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.3.0-green.svg)](https://github.com/bitflight-devops/hallucination-detector/releases)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-blueviolet.svg)](https://github.com/bitflight-devops/hallucination-detector)
+[![Cursor](https://img.shields.io/badge/Cursor-compatible-orange.svg)](https://github.com/bitflight-devops/hallucination-detector)
+[![Codex](https://img.shields.io/badge/Codex-compatible-yellow.svg)](https://github.com/bitflight-devops/hallucination-detector)
+[![OpenCode](https://img.shields.io/badge/OpenCode-compatible-teal.svg)](https://github.com/bitflight-devops/hallucination-detector)
+[![npx skills](https://img.shields.io/badge/npx%20skills-install-black.svg)](https://github.com/vercel-labs/skills)
+[![GitHub issues](https://img.shields.io/github/issues/bitflight-devops/hallucination-detector)](https://github.com/bitflight-devops/hallucination-detector/issues)
+
 Prevents Claude from finishing tasks with speculation, unverified claims, or invented causality.
 
 ## Why Install This?
