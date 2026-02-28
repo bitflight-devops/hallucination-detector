@@ -22,30 +22,9 @@ const { existsSync } = require('node:fs');
 
 const { Octokit } = require('octokit');
 const matter = require('gray-matter');
+const { OWNER, REPO, ROLE_MAP, BENEFIT_MAP, normalizeTitle } = require('./lib/story-helpers.cjs');
 
-const OWNER = 'bitflight-devops';
-const REPO = 'hallucination-detector';
-const BACKLOG_DIR = join(process.cwd(), '.claude', 'backlog');
-
-// ---------------------------------------------------------------------------
-// Maps adapted for hallucination-detector
-// ---------------------------------------------------------------------------
-
-const ROLE_MAP = {
-  Feature: 'developer integrating Claude Code stop hooks',
-  Bug: 'developer relying on the hallucination detector',
-  Refactor: 'maintainer of the detection codebase',
-  Docs: 'developer reading the plugin documentation',
-  Chore: 'maintainer of the project infrastructure',
-};
-
-const BENEFIT_MAP = {
-  Feature: 'the detector becomes more accurate and complete',
-  Bug: 'the detector works correctly and reliably',
-  Refactor: 'the detection code is cleaner and more maintainable',
-  Docs: 'documentation is accurate and trustworthy',
-  Chore: 'the project infrastructure stays healthy',
-};
+const BACKLOG_DIR = join(__dirname, '..', 'backlog');
 
 // ---------------------------------------------------------------------------
 // Backlog file parsing
@@ -108,11 +87,14 @@ function extractExtraFields(extra) {
 
   for (const rawLine of extra.split('\n')) {
     if (rawLine.startsWith('**Research first**:')) {
-      fields.researchFirst = rawLine.split(':', 2)[1]?.trim() ?? '';
+      const idx = rawLine.indexOf(':');
+      fields.researchFirst = idx >= 0 ? rawLine.slice(idx + 1).trim() : '';
     } else if (rawLine.startsWith('**Suggested location**:')) {
-      fields.suggestedLocation = rawLine.split(':', 2)[1]?.trim() ?? '';
+      const idx = rawLine.indexOf(':');
+      fields.suggestedLocation = idx >= 0 ? rawLine.slice(idx + 1).trim() : '';
     } else if (rawLine.startsWith('**Files**:')) {
-      fields.files = rawLine.split(':', 2)[1]?.trim() ?? '';
+      const idx = rawLine.indexOf(':');
+      fields.files = idx >= 0 ? rawLine.slice(idx + 1).trim() : '';
     } else if (rawLine.trim() && !rawLine.startsWith('---')) {
       notesLines.push(rawLine);
     }
@@ -171,22 +153,6 @@ function buildStoryBody(item) {
   }
 
   return `${sections.join('\n\n')}\n`;
-}
-
-// ---------------------------------------------------------------------------
-// Title normalization for matching
-// ---------------------------------------------------------------------------
-
-/**
- * Normalize an issue title for matching against backlog item names.
- *
- * @param {string} title - Raw issue or backlog item title
- * @returns {string} Lowercased, prefix-stripped title
- */
-function normalizeTitle(title) {
-  let clean = title.replace(/^(feat|fix|chore|docs|refactor):\s*/i, '');
-  clean = clean.replace(/^P[012]:\s*/i, '');
-  return clean.toLowerCase().trim();
 }
 
 // ---------------------------------------------------------------------------

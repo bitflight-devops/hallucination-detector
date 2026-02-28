@@ -19,9 +19,7 @@
  */
 
 const { Octokit } = require('octokit');
-
-const OWNER = 'bitflight-devops';
-const REPO = 'hallucination-detector';
+const { OWNER, REPO } = require('./lib/story-helpers.cjs');
 
 // Default priority when no matching label is found
 const DEFAULT_PRIORITY = 'P2';

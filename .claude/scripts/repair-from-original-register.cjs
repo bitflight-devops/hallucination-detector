@@ -27,27 +27,11 @@ const yaml = require('yaml');
 // Constants
 // ---------------------------------------------------------------------------
 
-const OWNER = 'bitflight-devops';
-const REPO = 'hallucination-detector';
+const { OWNER, REPO, ROLE_MAP, BENEFIT_MAP, normalizeTitle } = require('./lib/story-helpers.cjs');
+
 const REPO_ROOT = resolve(__dirname, '..', '..');
 const REGISTER_PATH = join(REPO_ROOT, '.claude', 'original-backlog-register.md');
 const BACKLOG_DIR = join(REPO_ROOT, '.claude', 'backlog');
-
-const ROLE_MAP = {
-  Feature: 'developer using the hallucination-detector plugin',
-  Bug: 'developer relying on the hallucination-detector',
-  Refactor: 'maintainer of the hallucination-detector codebase',
-  Docs: 'developer reading the hallucination-detector documentation',
-  Chore: 'maintainer of the project infrastructure',
-};
-
-const BENEFIT_MAP = {
-  Feature: 'the detection pipeline becomes more capable and complete',
-  Bug: 'the stop-hook works correctly and reliably',
-  Refactor: 'the code is cleaner and more maintainable',
-  Docs: 'documentation is accurate and trustworthy',
-  Chore: 'the project infrastructure stays healthy',
-};
 
 // Bold-key field prefix → dict key mapping.
 // Keys are the literal bold-prefix as it appears in the markdown (colon included).
@@ -75,10 +59,6 @@ const MULTILINE_FIELDS = new Set([
   '**Citations**:',
 ]);
 
-// Regex to strip conventional commit and priority prefixes from titles.
-// Compiled once at module level.
-const PREFIX_RE = /^(?:feat|fix|chore|docs|refactor):\s*/i;
-const PRIORITY_PREFIX_RE = /^P[012]:\s*/i;
 const SEPARATOR_LINE_RE = /^---+\s*$/gm;
 
 // ---------------------------------------------------------------------------
@@ -255,21 +235,6 @@ function parseRegister() {
 // ---------------------------------------------------------------------------
 // Title normalization and issue matching
 // ---------------------------------------------------------------------------
-
-/**
- * Normalize a title for comparison:
- * - strips feat:/fix:/chore:/docs:/refactor: prefixes
- * - strips P0:/P1:/P2: prefixes
- * - lowercases
- *
- * @param {string} title
- * @returns {string}
- */
-function normalizeTitle(title) {
-  let clean = title.replace(PREFIX_RE, '');
-  clean = clean.replace(PRIORITY_PREFIX_RE, '');
-  return clean.toLowerCase().trim();
-}
 
 /**
  * Fuzzy match a key against an issue map by substring containment.
@@ -491,10 +456,11 @@ function buildStoryBody(item, groomedContent = '') {
  * Only writes if the new description is longer than the existing one.
  *
  * @param {Record<string, string>} item
+ * @param {string|null} [resolvedPath] - Pre-resolved file path (avoids re-scanning)
  * @returns {boolean} true if a file was updated
  */
-function updatePerItemFile(item) {
-  const filePath = findPerItemFile(item);
+function updatePerItemFile(item, resolvedPath) {
+  const filePath = resolvedPath ?? findPerItemFile(item);
   if (!filePath) {
     return false;
   }
@@ -564,7 +530,7 @@ async function processPair(item, issue, octokit, dryRun) {
     return { filesUpdated: 0, issuesUpdated: issue ? 1 : 0, noIssue: issue ? 0 : 1 };
   }
 
-  const filesUpdated = updatePerItemFile(item) ? 1 : 0;
+  const filesUpdated = updatePerItemFile(item, perItemPath) ? 1 : 0;
 
   if (issue) {
     const newBody = buildStoryBody(item, groomedContent);

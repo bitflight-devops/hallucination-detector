@@ -57,6 +57,15 @@ Any change that alters this stdout shape silently disables the entire hook. Clau
 - **Versioning:** semantic-release
 - **Git hooks:** husky (pre-commit, commit-msg via commitlint)
 
+### Agent delegation rules
+
+These rules exist because they were violated in the past. Follow them exactly.
+
+1. **Do not edit JavaScript files directly.** Delegate all JS implementation to the `javascript-pro` agent. It has project-specific rules for CJS conventions, Biome compliance, and codebase patterns that the orchestrator does not.
+2. **Spec first, then delegate.** Before delegating to an agent, write out the spec: what to change, what the interface should look like, what consistency rules to follow, and what files to create or modify. The agent develops from the spec — not from vague instructions.
+3. **Shared modules over duplication.** When multiple scripts need the same constants, types, or functions, tell the agent to create a shared helper module and import from it. Specify the module path, exports, and which consumers should import it.
+4. **One agent per coherent unit of work.** Don't split a tightly coupled change across multiple agents (they can't coordinate). Don't merge unrelated changes into one agent (it loses focus).
+
 ### Dev tooling rules
 
 These rules exist because they were violated in the past. Follow them exactly.
