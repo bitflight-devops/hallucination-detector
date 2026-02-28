@@ -39,6 +39,7 @@ One temp file per session: `${os.tmpdir()}/claude-hallucination-audit-${sessionI
 ### Hook contract with Claude Code
 
 **This is the most critical invariant.** The Stop hook's stdout MUST be either:
+
 - `{ "decision": "block", "reason": "..." }` (block the response)
 - Nothing (allow the response)
 
@@ -276,6 +277,7 @@ After creating the issue, add a comment covering:
 #### Step 6: Link the issue
 
 - If it depends on another issue, add it as a sub-issue of the parent using the GitHub UI or:
+
   ```bash
   gh api graphql -f query='
     mutation {
@@ -286,12 +288,16 @@ After creating the issue, add a comment covering:
     }
   '
   ```
+
 - GitHub sub-issues only allow one parent. For secondary dependencies, add a cross-reference comment:
+
   ```markdown
   ### Cross-reference: also depends on #N
   [Explain the secondary dependency]
   ```
+
 - Get node IDs with:
+
   ```bash
   gh api graphql -f query='{
     repository(owner: "bitflight-devops", name: "hallucination-detector") {
@@ -373,6 +379,7 @@ Break the task into its constituent parts. What are the inputs, outputs, constra
 ### 2. Research how this problem is solved
 
 Search for how other repositories and projects solve the same problem. Find several concrete examples (3+). Use WebSearch, WebFetch, and Explore agents. Look at:
+
 - Popular open-source projects that face the same challenge
 - npm packages that encapsulate the solution (prefer recent, maintained, feature-rich libraries over writing code ourselves)
 - Existing patterns in this codebase or the claude_skills source repo
