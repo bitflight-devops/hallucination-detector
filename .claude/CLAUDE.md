@@ -48,20 +48,32 @@ Any change that alters this stdout shape silently disables the entire hook. Clau
 
 ### Stack
 
-- **Runtime:** Node.js built-ins only (`node:fs`, `node:os`, `node:path`). Zero `dependencies` in package.json.
+- **Runtime hooks:** Node.js built-ins only (`node:fs`, `node:os`, `node:path`). Zero `dependencies` in package.json. This constraint applies ONLY to the hook scripts that end users install — not to dev tooling.
+- **Dev/utility scripts:** Use proper npm packages freely. Install as `devDependencies` with pnpm. Never shell out to CLI tools when a native library exists (e.g., use `@octokit/rest` not `child_process.execSync('gh ...')`).
+- **Package manager:** pnpm (not npm, not yarn)
 - **Module system:** CommonJS (`.cjs` files)
 - **Linter/formatter:** Biome (`npx biome check .`)
 - **Tests:** Node.js built-in test runner (`node --test 'tests/**/*.test.cjs'`)
 - **Versioning:** semantic-release
 - **Git hooks:** husky (pre-commit, commit-msg via commitlint)
 
+### Dev tooling rules
+
+These rules exist because they were violated in the past. Follow them exactly.
+
+1. **Runtime vs. dev dependency boundary.** The runtime hooks (`scripts/hallucination-audit-stop.cjs`, `scripts/hallucination-framing-session-start.cjs`) MUST have zero `dependencies` — they run on end-user machines. Everything else (utility scripts, tests, CI) can use any `devDependencies` needed.
+2. **Use native libraries, not CLI wrappers.** Do not shell out to CLI tools (`gh`, `git`, `curl`) via `child_process` when a proper Node.js library exists. `@octokit/rest` for GitHub API, `js-yaml` for YAML, etc. Shelling out is fragile, hard to test, and loses type information.
+3. **pnpm only.** Use `pnpm add -D` to install packages. Do not use `npm install` or `yarn add`. Run scripts with `pnpm run` or `pnpm exec`.
+4. **devDependencies are not restricted.** The dev environment can have as many packages as needed. Do not artificially constrain dev tooling to match the zero-dependency runtime constraint.
+
 ### Commands
 
 ```bash
-npm test          # Run tests
-npm run lint      # Biome check
-npm run lint:fix  # Biome auto-fix
-npm run format    # Biome format
+pnpm test          # Run tests
+pnpm run lint      # Biome check
+pnpm run lint:fix  # Biome auto-fix
+pnpm run format    # Biome format
+pnpm add -D <pkg>  # Add a dev dependency
 ```
 
 ### Adding a new detection category
