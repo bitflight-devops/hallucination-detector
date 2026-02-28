@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions: {}
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify plugin.json version matches tag
+        run: |
+          plugin_version=$(node -e "console.log(require('./.claude-plugin/plugin.json').version)")
+          tag_version="${{ steps.version.outputs.version }}"
+          if [ "$plugin_version" != "$tag_version" ]; then
+            echo "❌ Version mismatch: plugin.json=$plugin_version tag=$tag_version"
+            exit 1
+          fi
+          echo "✅ Version match: $tag_version"
+
+      - name: Build bundle
+        run: ./scripts/bundle.sh
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Find the previous tag
+          PREV_TAG=$(git tag --sort=-creatordate | grep '^v' | sed -n '2p' || true)
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "First release — including all commits"
+            RANGE="HEAD"
+          else
+            echo "Generating changelog since $PREV_TAG"
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+
+          # Categorize commits
+          {
+            echo "changelog<<EOF"
+
+            # Features
+            features=$(git log "$RANGE" --pretty=format:"%s" --grep="^feat" 2>/dev/null || true)
+            if [ -n "$features" ]; then
+              echo "### Features"
+              echo "$features" | sed 's/^feat[:(]//' | sed 's/^/- /'
+              echo
+            fi
+
+            # Fixes
+            fixes=$(git log "$RANGE" --pretty=format:"%s" --grep="^fix" 2>/dev/null || true)
+            if [ -n "$fixes" ]; then
+              echo "### Bug Fixes"
+              echo "$fixes" | sed 's/^fix[:(]//' | sed 's/^/- /'
+              echo
+            fi
+
+            # Docs
+            docs=$(git log "$RANGE" --pretty=format:"%s" --grep="^docs" 2>/dev/null || true)
+            if [ -n "$docs" ]; then
+              echo "### Documentation"
+              echo "$docs" | sed 's/^docs[:(]//' | sed 's/^/- /'
+              echo
+            fi
+
+            # Other commits not matching conventional prefixes
+            other=$(git log "$RANGE" --pretty=format:"%s" --invert-grep --grep="^feat" --grep="^fix" --grep="^docs" --grep="^chore" --grep="^ci" --grep="^style" --grep="^refactor" --grep="^test" 2>/dev/null || true)
+            if [ -n "$other" ]; then
+              echo "### Other Changes"
+              echo "$other" | sed 's/^/- /'
+              echo
+            fi
+
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ steps.version.outputs.version }}"
+          body: |
+            ## Hallucination Detector v${{ steps.version.outputs.version }}
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            ---
+
+            ### Installation
+
+            **Quick install (any agent):**
+            ```bash
+            npx skills add bitflight-devops/hallucination-detector
+            ```
+
+            **Claude Code:**
+            ```bash
+            /plugin marketplace add bitflight-devops/hallucination-detector
+            /plugin install hallucination-detector@hallucination-detector
+            ```
+
+            **Manual:** Download `hallucination-detector.skill` below and extract.
+          files: |
+            dist/hallucination-detector.skill
+          generate_release_notes: false
