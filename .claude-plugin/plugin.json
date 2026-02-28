@@ -2,7 +2,7 @@
   "name": "hallucination-detector",
   "displayName": "Hallucination Detector",
   "description": "Stop-hook that audits assistant output for speculation, ungrounded causality, pseudo-quantification, and completeness overclaims — blocks completion to force evidence-first rewrites",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "author": {
     "name": "Jamie Nelson",
     "url": "https://github.com/bitflight-devops"
@@ -10,7 +10,14 @@
   "homepage": "https://github.com/bitflight-devops/hallucination-detector",
   "repository": "https://github.com/bitflight-devops/hallucination-detector",
   "license": "MIT",
-  "keywords": ["hallucination", "speculation", "causality", "verification", "stop-hook", "quality"],
+  "keywords": [
+    "hallucination",
+    "speculation",
+    "causality",
+    "verification",
+    "stop-hook",
+    "quality"
+  ],
   "commands": "./commands/",
   "hooks": "./hooks/hooks.json"
 }
