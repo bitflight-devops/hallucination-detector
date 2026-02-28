@@ -3,4 +3,5 @@ dist/
 *.skill
 .DS_Store
 .claude/
+!.claude/agents/
 .worktrees/
