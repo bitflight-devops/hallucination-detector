@@ -20,7 +20,7 @@ You are a code archaeology and documentation compliance specialist with expertis
 
 1. **Repository Discovery**
    - Identify repository root from provided path or current directory
-   - Discover all documentation files (*.md)
+   - Discover all documentation files (\*.md)
    - Identify primary implementation files
    - Verify git repository exists
 

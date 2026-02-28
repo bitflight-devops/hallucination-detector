@@ -2,7 +2,7 @@ node_modules/
 dist/
 *.skill
 .DS_Store
-.claude/
+.claude/*
 !.claude/agents/
 !.claude/rules/
 !.claude/skills/

@@ -8,11 +8,11 @@ A Claude Code stop-hook plugin that audits assistant output for speculation, ung
 
 ### Runtime files
 
-| File | Role |
-|------|------|
-| `scripts/hallucination-audit-stop.cjs` | **Stop hook** — core detection. Reads stdin JSON from Claude Code, parses JSONL transcript, extracts last assistant message, runs `findTriggerMatches()`, emits `{ "decision": "block", "reason": "..." }` or exits cleanly. |
-| `scripts/hallucination-framing-session-start.cjs` | **SessionStart hook** — injects behavioral framing text into session context at startup. |
-| `hooks/hooks.json` | Registers both hooks with Claude Code. |
+| File                                              | Role                                                                                                                                                                                                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/hallucination-audit-stop.cjs`            | **Stop hook** — core detection. Reads stdin JSON from Claude Code, parses JSONL transcript, extracts last assistant message, runs `findTriggerMatches()`, emits `{ "decision": "block", "reason": "..." }` or exits cleanly. |
+| `scripts/hallucination-framing-session-start.cjs` | **SessionStart hook** — injects behavioral framing text into session context at startup.                                                                                                                                     |
+| `hooks/hooks.json`                                | Registers both hooks with Claude Code.                                                                                                                                                                                       |
 
 ### Detection categories (4 active)
 
@@ -23,7 +23,7 @@ A Claude Code stop-hook plugin that audits assistant output for speculation, ung
 
 ### Key function: `findTriggerMatches(text)`
 
-Located at `scripts/hallucination-audit-stop.cjs` lines 214–456. Returns `[{ kind, evidence, offset }]`. Exported via `module.exports` for testing and reuse.
+Defined in `scripts/hallucination-audit-stop.cjs` and exported via `module.exports.findTriggerMatches`. Returns `[{ kind, evidence, offset }]`.
 
 ### Suppression mechanisms
 
@@ -134,12 +134,12 @@ When bringing in new files from the source repo, copy them into the appropriate 
 
 ## Subagents (`.claude/agents/`)
 
-| Agent | When to use |
-|-------|------------|
-| `code-review` | Only when explicitly requested. Reviews for LLM slop, security, pattern adherence. |
-| `fact-checker` | Verify a single factual claim against primary sources. MUST use WebFetch/WebSearch/gh. |
-| `doc-drift-auditor` | Compare documentation claims against code reality. Git forensics. |
-| `javascript-pro` | Implementation work. Knows this project's CJS/Biome/node:test stack. |
+| Agent               | When to use                                                                            |
+| ------------------- | -------------------------------------------------------------------------------------- |
+| `code-review`       | Only when explicitly requested. Reviews for LLM slop, security, pattern adherence.     |
+| `fact-checker`      | Verify a single factual claim against primary sources. MUST use WebFetch/WebSearch/gh. |
+| `doc-drift-auditor` | Compare documentation claims against code reality. Git forensics.                      |
+| `javascript-pro`    | Implementation work. Knows this project's CJS/Biome/node:test stack.                   |
 
 ## Issue Management
 
@@ -149,35 +149,35 @@ Every issue gets one label from each of these dimensions:
 
 **Impact type** — what kind of change is it:
 
-| Label | Meaning | Example |
-|-------|---------|---------|
-| `impact: additive` | New patterns in existing pipeline. No architecture change. | Adding a regex category |
-| `impact: structural` | Changes pipeline architecture. Existing tests may break. | Sentence splitting, scoring layers |
-| `impact: contract` | Changes stdin/stdout contract with Claude Code. | JSON output format, new decision types |
-| `impact: infrastructure` | Adds new subsystem. New failure modes. | Config loading, MCP server, state management |
-| `impact: external` | Requires network calls, APIs, or new runtimes. | RAG verification, Exa.ai |
+| Label                    | Meaning                                                    | Example                                      |
+| ------------------------ | ---------------------------------------------------------- | -------------------------------------------- |
+| `impact: additive`       | New patterns in existing pipeline. No architecture change. | Adding a regex category                      |
+| `impact: structural`     | Changes pipeline architecture. Existing tests may break.   | Sentence splitting, scoring layers           |
+| `impact: contract`       | Changes stdin/stdout contract with Claude Code.            | JSON output format, new decision types       |
+| `impact: infrastructure` | Adds new subsystem. New failure modes.                     | Config loading, MCP server, state management |
+| `impact: external`       | Requires network calls, APIs, or new runtimes.             | RAG verification, Exa.ai                     |
 
 **Risk level** — how dangerous is it:
 
-| Label | Meaning |
-|-------|---------|
-| `risk: low` | Additive, backward-compatible, trivial rollback |
-| `risk: medium` | New subsystem or structural change, moderate rollback |
-| `risk: high` | Contract change, deadlock potential, or external deps |
-| `risk: critical` | Can silently disable the hook if misimplemented |
+| Label            | Meaning                                               |
+| ---------------- | ----------------------------------------------------- |
+| `risk: low`      | Additive, backward-compatible, trivial rollback       |
+| `risk: medium`   | New subsystem or structural change, moderate rollback |
+| `risk: high`     | Contract change, deadlock potential, or external deps |
+| `risk: critical` | Can silently disable the hook if misimplemented       |
 
 **Implementation phase** — when to do it:
 
-| Label | Phase | What | Can start |
-|-------|-------|------|-----------|
-| `phase: 1-additive-patterns` | 1 | Zero-risk additive regex patterns | Now |
-| `phase: 2-config-foundation` | 2 | Config system (unlocks phases 4–8) | Now |
-| `phase: 3-sentence-infra` | 3 | Sentence splitting infrastructure | Now |
-| `phase: 4-scoring-rebuild` | 4 | Scoring architecture (changes match shape) | After phase 2 |
-| `phase: 5-output-pipeline` | 5 | Output format (must preserve hook contract) | After phases 2, 4 |
-| `phase: 6-stateful-escalation` | 6 | Escalation logic (highest internal risk) | After phases 2, 4 |
-| `phase: 7-external-isolated` | 7 | External deps, separate packages | After phase 2 |
-| `phase: 8-opt-in-advanced` | 8 | Opt-in features requiring config | After phase 2 |
+| Label                          | Phase | What                                        | Can start         |
+| ------------------------------ | ----- | ------------------------------------------- | ----------------- |
+| `phase: 1-additive-patterns`   | 1     | Zero-risk additive regex patterns           | Now               |
+| `phase: 2-config-foundation`   | 2     | Config system (unlocks phases 4–8)          | Now               |
+| `phase: 3-sentence-infra`      | 3     | Sentence splitting infrastructure           | Now               |
+| `phase: 4-scoring-rebuild`     | 4     | Scoring architecture (changes match shape)  | After phase 2     |
+| `phase: 5-output-pipeline`     | 5     | Output format (must preserve hook contract) | After phases 2, 4 |
+| `phase: 6-stateful-escalation` | 6     | Escalation logic (highest internal risk)    | After phases 2, 4 |
+| `phase: 7-external-isolated`   | 7     | External deps, separate packages            | After phase 2     |
+| `phase: 8-opt-in-advanced`     | 8     | Opt-in features requiring config            | After phase 2     |
 
 **Topic** — what area it covers (for filtering/discovery):
 
@@ -222,13 +222,13 @@ Ask these questions in order:
 
 #### Step 2: Determine risk level
 
-| If the impact type is... | Default risk is... | Upgrade to higher risk if... |
-|--------------------------|-------------------|------------------------------|
-| `additive` | `low` | High false-positive rate expected |
-| `structural` | `medium` | Changes `findTriggerMatches()` return shape (breaks tests) |
-| `infrastructure` | `medium` | Failure crashes the hook (fail-open = detection disabled) |
-| `contract` | `high` | Changes stdout format (can silently disable hook) → `critical` |
-| `external` | `high` | Introduces async into the synchronous pipeline |
+| If the impact type is... | Default risk is... | Upgrade to higher risk if...                                   |
+| ------------------------ | ------------------ | -------------------------------------------------------------- |
+| `additive`               | `low`              | High false-positive rate expected                              |
+| `structural`             | `medium`           | Changes `findTriggerMatches()` return shape (breaks tests)     |
+| `infrastructure`         | `medium`           | Failure crashes the hook (fail-open = detection disabled)      |
+| `contract`               | `high`             | Changes stdout format (can silently disable hook) → `critical` |
+| `external`               | `high`             | Introduces async into the synchronous pipeline                 |
 
 #### Step 3: Determine phase
 
@@ -349,8 +349,8 @@ New kind: `your_category_name`
 
 - [ ] [specific, testable criterion]
 - [ ] Tests cover positive and negative cases
-- [ ] `npm test` passes
-- [ ] `npm run lint` passes
+- [ ] `pnpm test` passes
+- [ ] `pnpm run lint` passes
 
 ## References
 

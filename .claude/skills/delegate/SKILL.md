@@ -3,6 +3,7 @@ name: delegate
 description: Quick delegation template for sub-agent prompts. Use when assigning work to a sub-agent, before invoking the Task tool, or when preparing prompts for specialized agents. Provides the WHERE-WHAT-WHY framework. For comprehensive delegation guidance, activate the agent-orchestration how-to-delegate skill.
 user-invocable: true
 ---
+
 # Delegation Template
 
 **Workflow Reference**: See [Multi-Agent Orchestration](./../../knowledge/workflow-diagrams/multi-agent-orchestration.md) for complete delegation flow with DONE/BLOCKED signaling.
