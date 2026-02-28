@@ -103,7 +103,7 @@ This is the most common type of change. Follow this pattern exactly:
 
 ## `.claude/` Directory Structure
 
-```
+```text
 .claude/
 ├── CLAUDE.md          ← This file (project guide, tracked in git)
 ├── agents/            ← Subagent definitions (tracked in git)
@@ -185,7 +185,7 @@ Every issue gets one label from each of these dimensions:
 
 ### Sub-issue hierarchy (current)
 
-```
+```text
 #10 (config) ← FOUNDATION
   ├── #11 (RAG verification)
   ├── #12 (confidence scoring)
