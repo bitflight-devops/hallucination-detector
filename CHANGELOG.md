@@ -1,3 +1,9 @@
+## [1.1.2](https://github.com/bitflight-devops/hallucination-detector/compare/v1.1.1...v1.1.2) (2026-02-28)
+
+### Bug Fixes
+
+* allow sibling-only duplicate headings in CHANGELOG.md ([feb0e66](https://github.com/bitflight-devops/hallucination-detector/commit/feb0e668a520d213dc2e5fdafcc40afb8400b158))
+
 ## [1.1.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.1.0...v1.1.1) (2026-02-28)
 
 ### Bug Fixes
