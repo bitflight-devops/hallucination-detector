@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.1.3...v1.2.0) (2026-02-28)
+
+### Features
+
+* add CLAUDE.md behavioral framing for hallucination prevention ([b560871](https://github.com/bitflight-devops/hallucination-detector/commit/b560871f2b562d44528775ef79da4bee37a0b419))
+
 ## [1.1.3](https://github.com/bitflight-devops/hallucination-detector/compare/v1.1.2...v1.1.3) (2026-02-28)
 
 ### Bug Fixes
