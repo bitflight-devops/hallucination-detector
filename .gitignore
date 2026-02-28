@@ -7,5 +7,6 @@ dist/
 !.claude/rules/
 !.claude/skills/
 !.claude/commands/
+!.claude/scripts/
 !.claude/CLAUDE.md
 .worktrees/

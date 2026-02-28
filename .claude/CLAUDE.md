@@ -91,10 +91,24 @@ This is the most common type of change. Follow this pattern exactly:
 │   └── javascript-pro.md
 ├── rules/             ← Reusable rule files (tracked in git, created as needed)
 ├── skills/            ← Skill definitions (tracked in git, created as needed)
-└── commands/          ← Custom slash commands (tracked in git, created as needed)
+├── commands/          ← Custom slash commands (tracked in git, created as needed)
+└── scripts/           ← Utility scripts for issue management, etc. (tracked in git)
 ```
 
-The `.gitignore` ignores `.claude/` by default but has explicit exceptions for `agents/`, `rules/`, `skills/`, `commands/`, and `CLAUDE.md`. Other directories under `.claude/` (caches, local state) remain ignored.
+The `.gitignore` ignores `.claude/` by default but has explicit exceptions for `agents/`, `rules/`, `skills/`, `commands/`, `scripts/`, and `CLAUDE.md`. Other directories under `.claude/` (caches, local state, worktrees) remain ignored.
+
+### Source repo
+
+The agents, rules, skills, and commands in `.claude/` originate from [Jamie-BitFlight/claude_skills](https://github.com/Jamie-BitFlight/claude_skills). To browse or pull updates from the source:
+
+```bash
+# Clone into the ignored worktrees directory
+git clone https://github.com/Jamie-BitFlight/claude_skills.git .claude/worktrees/claude_skills
+# Browse available agents, rules, skills, commands, scripts
+ls .claude/worktrees/claude_skills/.claude/{agents,rules,skills,commands,scripts}/
+```
+
+When bringing in new files from the source repo, copy them into the appropriate `.claude/` subdirectory in this project and commit. Adapt any hardcoded repo names or paths (the source scripts reference `Jamie-BitFlight/claude_skills` and its project IDs).
 
 ## Subagents (`.claude/agents/`)
 
