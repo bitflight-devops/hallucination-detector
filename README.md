@@ -15,9 +15,32 @@ These patterns are difficult to catch because they sound authoritative. This plu
 
 ## Installation
 
-**Note:** Installation differs by platform. Claude Code and Cursor have built-in plugin support. Codex and OpenCode require manual setup.
+### Quick Install (any agent)
 
-### Claude Code (via Plugin Marketplace)
+Use the [Vercel Skills CLI](https://github.com/vercel-labs/skills) to install across any supported agent:
+
+```bash
+npx skills add bitflight-devops/hallucination-detector
+```
+
+Target a specific agent:
+
+```bash
+npx skills add bitflight-devops/hallucination-detector -a claude-code
+npx skills add bitflight-devops/hallucination-detector -a cursor
+npx skills add bitflight-devops/hallucination-detector -a codex
+npx skills add bitflight-devops/hallucination-detector -a opencode
+```
+
+To uninstall:
+
+```bash
+npx skills remove hallucination-detector
+```
+
+### Platform-Specific Installation
+
+#### Claude Code (via Plugin Marketplace)
 
 In Claude Code, register the marketplace first:
 
@@ -31,7 +54,7 @@ Then install the plugin:
 /plugin install hallucination-detector@hallucination-detector
 ```
 
-### Cursor (via Plugin Marketplace)
+#### Cursor (via Plugin Marketplace)
 
 In Cursor Agent chat, install from marketplace:
 
@@ -39,7 +62,7 @@ In Cursor Agent chat, install from marketplace:
 /plugin-add hallucination-detector
 ```
 
-### Codex
+#### Codex
 
 Tell Codex:
 
@@ -49,7 +72,7 @@ Fetch and follow instructions from https://raw.githubusercontent.com/bitflight-d
 
 **Detailed docs:** [.codex/INSTALL.md](.codex/INSTALL.md)
 
-### OpenCode
+#### OpenCode
 
 Tell OpenCode:
 
@@ -59,7 +82,7 @@ Fetch and follow instructions from https://raw.githubusercontent.com/bitflight-d
 
 **Detailed docs:** [.opencode/INSTALL.md](.opencode/INSTALL.md)
 
-### Verify Installation
+#### Verify Installation
 
 Start a new session in your chosen platform and write a response containing speculation (e.g., "this is probably caused by..."). The plugin should block the response and require evidence-first rewriting.
 
