@@ -1,6 +1,6 @@
 {
   "name": "hallucination-detector",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Stop-hook that audits assistant output for speculation, ungrounded causality, pseudo-quantification, and completeness overclaims",
   "main": "scripts/hallucination-audit-stop.cjs",
   "scripts": {
