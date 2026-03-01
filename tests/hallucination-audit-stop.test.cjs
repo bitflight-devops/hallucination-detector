@@ -1,5 +1,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   findTriggerMatches,
@@ -12,6 +15,7 @@ const {
   aggregateWeightedScore,
   getLabelForScore,
   scoreText,
+  loadWeights,
   DEFAULT_WEIGHTS,
 } = require('../scripts/hallucination-audit-stop.cjs');
 
@@ -409,7 +413,7 @@ describe('aggregateWeightedScore', () => {
     assert.equal(aggregateWeightedScore(scores, DEFAULT_WEIGHTS), 1);
   });
 
-  it('uses only triggered category weights for partial scores', () => {
+  it('returns the triggered category fractional weight for partial scores', () => {
     const scores = {
       speculation_language: 1,
       causality_language: 0,
@@ -417,7 +421,7 @@ describe('aggregateWeightedScore', () => {
       completeness_claim: 0,
       fabricated_source: 0,
     };
-    // speculation weight = 0.25, total weights ≈ 1.0, so result ≈ 0.25
+    // speculation weight = 0.25, all weights sum ≈ 1.0, so result ≈ 0.25
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
     assert.ok(Math.abs(result - 0.25) < 0.001, `Expected ~0.25, got ${result}`);
   });
@@ -439,6 +443,30 @@ describe('aggregateWeightedScore', () => {
   it('returns 0 when weights object is empty', () => {
     const scores = { speculation_language: 1 };
     assert.equal(aggregateWeightedScore(scores, {}), 0);
+  });
+
+  it('ignores unknown category keys in custom weights', () => {
+    const customWeights = { unknown_key: 99, speculation_language: 1 };
+    const scores = { speculation_language: 1 };
+    // unknown_key should be ignored; only speculation_language contributes
+    const result = aggregateWeightedScore(scores, customWeights);
+    assert.equal(result, 1);
+  });
+
+  it('ignores NaN weight values', () => {
+    const customWeights = { speculation_language: Number.NaN, causality_language: 0.5 };
+    const scores = { speculation_language: 1, causality_language: 1 };
+    // NaN weight for speculation_language is skipped; only causality contributes
+    const result = aggregateWeightedScore(scores, customWeights);
+    assert.equal(result, 1);
+  });
+
+  it('ignores negative weight values', () => {
+    const customWeights = { speculation_language: -1, causality_language: 0.5 };
+    const scores = { speculation_language: 1, causality_language: 1 };
+    // Negative weight for speculation_language is skipped; only causality contributes
+    const result = aggregateWeightedScore(scores, customWeights);
+    assert.equal(result, 1);
   });
 });
 
@@ -500,12 +528,12 @@ describe('scoreText', () => {
     assert.equal(results[0].aggregateScore, 0);
   });
 
-  it('speculative sentence gets UNCERTAIN label', () => {
+  it('causal sentence gets UNCERTAIN label', () => {
     // causality_language weight = 0.30, so score = 0.30 → UNCERTAIN
     const results = scoreText('The test breaks because the config is missing.');
-    const specResult = results.find((r) => r.scores.causality_language === 1);
-    assert.ok(specResult);
-    assert.equal(specResult.label, 'UNCERTAIN');
+    const causalResult = results.find((r) => r.scores.causality_language === 1);
+    assert.ok(causalResult);
+    assert.equal(causalResult.label, 'UNCERTAIN');
   });
 
   it('highly flagged sentence gets HALLUCINATED label', () => {
@@ -555,5 +583,94 @@ describe('DEFAULT_WEIGHTS', () => {
   it('weights sum to 1.0', () => {
     const sum = Object.values(DEFAULT_WEIGHTS).reduce((a, b) => a + b, 0);
     assert.ok(Math.abs(sum - 1.0) < 1e-9, `Expected sum ~1.0, got ${sum}`);
+  });
+});
+
+// =============================================================================
+// loadWeights
+// =============================================================================
+describe('loadWeights', () => {
+  it('returns DEFAULT_WEIGHTS when no config file exists', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      assert.deepEqual(weights, DEFAULT_WEIGHTS);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('merges valid weight overrides from config file', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+        'module.exports = { weights: { speculation_language: 0.5, causality_language: 0.4 } };',
+      );
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      assert.equal(weights.speculation_language, 0.5);
+      assert.equal(weights.causality_language, 0.4);
+      // Other categories fall back to defaults
+      assert.equal(weights.pseudo_quantification, DEFAULT_WEIGHTS.pseudo_quantification);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('ignores invalid (non-numeric) weight values, falls back to default', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+        'module.exports = { weights: { speculation_language: "high", causality_language: 0.4 } };',
+      );
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      // Non-numeric value falls back to default
+      assert.equal(weights.speculation_language, DEFAULT_WEIGHTS.speculation_language);
+      assert.equal(weights.causality_language, 0.4);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('ignores unknown category keys from config', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+        'module.exports = { weights: { unknown_category: 0.99 } };',
+      );
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      assert.ok(!Object.hasOwn(weights, 'unknown_category'));
+      assert.deepEqual(weights, DEFAULT_WEIGHTS);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('returns DEFAULT_WEIGHTS when config has no weights property', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      fs.writeFileSync(path.join(tmpDir, '.hallucination-detectorrc.cjs'), 'module.exports = {};');
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      assert.deepEqual(weights, DEFAULT_WEIGHTS);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
   });
 });

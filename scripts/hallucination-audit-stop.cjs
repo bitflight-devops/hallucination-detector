@@ -508,12 +508,20 @@ function scoreSentence(sentence) {
  * that don't sum to 1 still produce values in [0, 1].
  */
 function aggregateWeightedScore(scores, weights) {
-  const w = weights || DEFAULT_WEIGHTS;
+  const w =
+    weights && typeof weights === 'object' && !Array.isArray(weights) ? weights : DEFAULT_WEIGHTS;
   let total = 0;
   let weightSum = 0;
-  for (const [category, weight] of Object.entries(w)) {
-    total += weight * (scores[category] || 0);
-    weightSum += weight;
+  // Only consider known detection categories; skip non-finite or negative weights.
+  for (const category of Object.keys(DEFAULT_WEIGHTS)) {
+    const rawWeight = w[category];
+    if (!Number.isFinite(rawWeight) || rawWeight < 0) continue;
+    const categoryScore =
+      typeof scores[category] === 'number' && Number.isFinite(scores[category])
+        ? Math.max(0, Math.min(1, scores[category]))
+        : 0;
+    total += rawWeight * categoryScore;
+    weightSum += rawWeight;
   }
   if (weightSum === 0) return 0;
   // Round to 10 decimal places to avoid floating-point boundary artifacts
@@ -535,8 +543,8 @@ function getLabelForScore(score) {
 
 /**
  * Load weights from an optional `.hallucination-detectorrc.cjs` config file
- * in the current working directory. Unknown keys are merged on top of the
- * defaults; missing keys fall back to defaults.
+ * in the current working directory. Only known category keys with finite
+ * non-negative numeric values are accepted; all others fall back to defaults.
  */
 function loadWeights() {
   const rcPath = path.join(process.cwd(), '.hallucination-detectorrc.cjs');
@@ -544,8 +552,15 @@ function loadWeights() {
     if (fs.existsSync(rcPath)) {
       // eslint-disable-next-line import/no-dynamic-require
       const rc = require(rcPath);
-      if (rc?.weights && typeof rc.weights === 'object') {
-        return { ...DEFAULT_WEIGHTS, ...rc.weights };
+      if (rc?.weights && typeof rc.weights === 'object' && !Array.isArray(rc.weights)) {
+        const merged = { ...DEFAULT_WEIGHTS };
+        for (const category of Object.keys(DEFAULT_WEIGHTS)) {
+          const val = rc.weights[category];
+          if (Number.isFinite(val) && val >= 0) {
+            merged[category] = val;
+          }
+        }
+        return merged;
       }
     }
   } catch {
