@@ -1,0 +1,95 @@
+name: Feature Request
+description: Propose a new feature that follows safe rollout practices (feature-flagged, default-off, contract-compatible).
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Feature Request Guidelines
+
+        All new features **must** satisfy the following requirements before they can be accepted:
+
+        1. **Feature Flag Required** – The feature must be gated behind a toggle (environment variable, config file entry, or explicit runtime parameter).
+        2. **Default-Off Behavior** – The feature must be disabled by default so existing behaviour is unchanged when the flag is absent or `false`.
+        3. **Contract Compatibility** – Existing outputs and contracts must remain identical unless the feature flag is explicitly enabled.
+        4. **Testing Requirements** – Acceptance criteria must include tests for both the _flag-off_ (legacy) and _flag-on_ (new) states.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A concise description of the feature you are proposing.
+      placeholder: Describe the feature in one or two sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation / Problem Statement
+      description: Why is this feature needed? What problem does it solve?
+      placeholder: Explain the use-case or pain point this feature addresses.
+    validations:
+      required: true
+
+  - type: textarea
+    id: feature_flag
+    attributes:
+      label: Feature Flag
+      description: |
+        Describe the feature flag that will gate this feature.
+        Include the flag name, type (env var / config key / runtime param), and the exact off/on values.
+      placeholder: |
+        - Flag name: `ENABLE_MY_FEATURE`
+        - Type: environment variable
+        - Default value (off): `false`
+        - Enabled value (on): `true`
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: default_off
+    attributes:
+      label: Default-Off Behavior
+      description: Confirm that the feature is disabled by default.
+      options:
+        - label: The feature is **disabled by default**; existing behavior is completely unchanged when the flag is absent or set to its off value.
+          required: true
+
+  - type: textarea
+    id: contract_compatibility
+    attributes:
+      label: Contract Compatibility
+      description: |
+        Describe how existing outputs, APIs, or data contracts are preserved.
+        If any contracts change when the flag is enabled, list them explicitly.
+      placeholder: |
+        - All existing outputs remain identical when the flag is off.
+        - When the flag is on, the following outputs change: …
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: |
+        List the acceptance criteria. **Both of the following test scenarios are required:**
+        - Tests that verify the **flag-off (legacy)** behaviour is unchanged.
+        - Tests that verify the **flag-on (new)** behaviour works as expected.
+      placeholder: |
+        - [ ] Unit/integration tests pass with the feature flag **off** (legacy behaviour unchanged).
+        - [ ] Unit/integration tests pass with the feature flag **on** (new behaviour verified).
+        - [ ] Documentation is updated to describe the feature flag and its effects.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional Context
+      description: Any other information, screenshots, or references relevant to this feature request.
+      placeholder: Add any additional context here.
+    validations:
+      required: false
