@@ -1,3 +1,21 @@
+## [1.4.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.3.2...v1.4.0) (2026-03-01)
+
+### Features
+
+- add issue management utility scripts (JS rewrites from claude_skills) ([42a7d1e](https://github.com/bitflight-devops/hallucination-detector/commit/42a7d1ea646ff9c8f70f89f76c057fdbc7247a36))
+- add sentence-level scoring and weighted multi-signal aggregation ([b3b4249](https://github.com/bitflight-devops/hallucination-detector/commit/b3b42498635e30f93943d46307879e53083ce76f))
+
+### Bug Fixes
+
+- add .gitattributes, fix .gitignore negation, format markdown with prettier ([6202897](https://github.com/bitflight-devops/hallucination-detector/commit/620289798eb824a8ec8d4b8c702df1cb58bd2716))
+- add language tags to fenced code blocks in CLAUDE.md ([198f45a](https://github.com/bitflight-devops/hallucination-detector/commit/198f45ac33016999622c8ec0085315a05f686622))
+- address code review warnings in issue management scripts ([14fb752](https://github.com/bitflight-devops/hallucination-detector/commit/14fb752377fc88816d41b2fcb886a1fa06a8a110))
+- correct pre-existing Biome formatting in test files to unblock CI ([90c2ebc](https://github.com/bitflight-devops/hallucination-detector/commit/90c2ebc29b6c317985302fc71cfd51f1626bfce8))
+- resolve CI failures in biome, markdownlint, and prettier checks ([9b9685f](https://github.com/bitflight-devops/hallucination-detector/commit/9b9685ff5c5ace98c7a862cb26acf5eb0b73adfa))
+- scope prettier to YAML+MD and add project config files ([bbaccad](https://github.com/bitflight-devops/hallucination-detector/commit/bbaccadfc49a770bdb347693aa6fc647321217a2))
+- track .claude/rules, skills, and commands in gitignore exceptions ([9618d02](https://github.com/bitflight-devops/hallucination-detector/commit/9618d02fac7590658c7cfd469f76e5992be17b7c))
+- validate weights in aggregateWeightedScore/loadWeights; add loadWeights tests; fix test names ([2c729f2](https://github.com/bitflight-devops/hallucination-detector/commit/2c729f2d2399eab551b49401ba21e240750f9561))
+
 ## [1.3.2](https://github.com/bitflight-devops/hallucination-detector/compare/v1.3.1...v1.3.2) (2026-02-28)
 
 ### Bug Fixes
