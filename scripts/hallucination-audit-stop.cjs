@@ -455,6 +455,139 @@ function findTriggerMatches(text) {
   return matches;
 }
 
+// =============================================================================
+// Sentence-level granularity and weighted multi-signal scoring
+// =============================================================================
+
+/**
+ * Split text into individual sentences on sentence-ending punctuation.
+ * Handles `.`, `!`, and `?` followed by whitespace.
+ * Edge cases (abbreviations, ellipses) may produce imperfect boundaries.
+ */
+function splitIntoSentences(text) {
+  const raw = text.split(/(?<=[.!?])\s+/);
+  return raw.map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/**
+ * Default weights for each detection category.
+ * Must sum to 1.0 for aggregate scores to be in [0, 1].
+ */
+const DEFAULT_WEIGHTS = {
+  speculation_language: 0.25,
+  causality_language: 0.3,
+  pseudo_quantification: 0.15,
+  completeness_claim: 0.2,
+  fabricated_source: 0.1,
+};
+
+/**
+ * Score a single sentence across all detection categories.
+ * Returns binary scores (0 or 1) per category.
+ */
+function scoreSentence(sentence) {
+  const matches = findTriggerMatches(sentence);
+  const scores = {
+    speculation_language: 0,
+    causality_language: 0,
+    pseudo_quantification: 0,
+    completeness_claim: 0,
+    fabricated_source: 0,
+  };
+  for (const match of matches) {
+    if (Object.hasOwn(scores, match.kind)) {
+      scores[match.kind] = 1;
+    }
+  }
+  return scores;
+}
+
+/**
+ * Aggregate per-category scores into a single weighted score.
+ * Normalizes by the sum of provided weights so custom weight sets
+ * that don't sum to 1 still produce values in [0, 1].
+ */
+function aggregateWeightedScore(scores, weights) {
+  const w =
+    weights && typeof weights === 'object' && !Array.isArray(weights) ? weights : DEFAULT_WEIGHTS;
+  let total = 0;
+  let weightSum = 0;
+  // Only consider known detection categories; skip non-finite or negative weights.
+  for (const category of Object.keys(DEFAULT_WEIGHTS)) {
+    const rawWeight = w[category];
+    if (!Number.isFinite(rawWeight) || rawWeight < 0) continue;
+    const categoryScore =
+      typeof scores[category] === 'number' && Number.isFinite(scores[category])
+        ? Math.max(0, Math.min(1, scores[category]))
+        : 0;
+    total += rawWeight * categoryScore;
+    weightSum += rawWeight;
+  }
+  if (weightSum === 0) return 0;
+  // Round to 10 decimal places to avoid floating-point boundary artifacts
+  const raw = total / weightSum;
+  return Math.round(raw * 1e10) / 1e10;
+}
+
+/**
+ * Map an aggregate score to a three-tier label.
+ *   GROUNDED     : score < 0.30
+ *   UNCERTAIN    : 0.30 <= score <= 0.60
+ *   HALLUCINATED : score > 0.60
+ */
+function getLabelForScore(score) {
+  if (score < 0.3) return 'GROUNDED';
+  if (score <= 0.6) return 'UNCERTAIN';
+  return 'HALLUCINATED';
+}
+
+/**
+ * Load weights from an optional `.hallucination-detectorrc.cjs` config file
+ * in the current working directory. Only known category keys with finite
+ * non-negative numeric values are accepted; all others fall back to defaults.
+ */
+function loadWeights() {
+  const rcPath = path.join(process.cwd(), '.hallucination-detectorrc.cjs');
+  try {
+    if (fs.existsSync(rcPath)) {
+      // eslint-disable-next-line import/no-dynamic-require
+      const rc = require(rcPath);
+      if (rc?.weights && typeof rc.weights === 'object' && !Array.isArray(rc.weights)) {
+        const merged = { ...DEFAULT_WEIGHTS };
+        for (const category of Object.keys(DEFAULT_WEIGHTS)) {
+          const val = rc.weights[category];
+          if (Number.isFinite(val) && val >= 0) {
+            merged[category] = val;
+          }
+        }
+        return merged;
+      }
+    }
+  } catch {
+    // ignore errors loading config
+  }
+  return DEFAULT_WEIGHTS;
+}
+
+/**
+ * Score every sentence in a block of text.
+ * Returns an array of per-sentence result objects:
+ *   { sentence, index, total, scores, aggregateScore, label }
+ *
+ * @param {string} text     - Input text to analyze.
+ * @param {object} [weights] - Optional weight overrides (defaults to DEFAULT_WEIGHTS).
+ */
+function scoreText(text, weights) {
+  const sentences = splitIntoSentences(text);
+  const total = sentences.length;
+  return sentences.map((sentence, index) => {
+    const scores = scoreSentence(sentence);
+    const aggregateScore = aggregateWeightedScore(scores, weights);
+    const label = getLabelForScore(aggregateScore);
+    return { sentence, index, total, scores, aggregateScore, label };
+  });
+}
+
 function loadLoopState(sessionId) {
   const statePath = path.join(
     os.tmpdir(),
@@ -564,4 +697,11 @@ module.exports = {
   isQualityScore,
   hasEnumerationNearby,
   parseJsonl,
+  splitIntoSentences,
+  scoreSentence,
+  aggregateWeightedScore,
+  getLabelForScore,
+  loadWeights,
+  scoreText,
+  DEFAULT_WEIGHTS,
 };

@@ -1,5 +1,8 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   findTriggerMatches,
@@ -7,6 +10,13 @@ const {
   extractTextFromMessageContent,
   getLastAssistantText,
   parseJsonl,
+  splitIntoSentences,
+  scoreSentence,
+  aggregateWeightedScore,
+  getLabelForScore,
+  scoreText,
+  loadWeights,
+  DEFAULT_WEIGHTS,
 } = require('../scripts/hallucination-audit-stop.cjs');
 
 // =============================================================================
@@ -287,5 +297,380 @@ describe('integration', () => {
     const matches = findTriggerMatches(text);
     const kinds = matches.map((m) => m.kind);
     assert.ok(kinds.includes('speculation_language'));
+  });
+});
+
+// =============================================================================
+// splitIntoSentences
+// =============================================================================
+describe('splitIntoSentences', () => {
+  it('splits on periods', () => {
+    const sentences = splitIntoSentences('First sentence. Second sentence. Third sentence.');
+    assert.equal(sentences.length, 3);
+    assert.equal(sentences[0], 'First sentence.');
+    assert.equal(sentences[1], 'Second sentence.');
+    assert.equal(sentences[2], 'Third sentence.');
+  });
+
+  it('splits on exclamation marks', () => {
+    const sentences = splitIntoSentences('Watch out! It is dangerous!');
+    assert.equal(sentences.length, 2);
+    assert.equal(sentences[0], 'Watch out!');
+  });
+
+  it('splits on question marks', () => {
+    const sentences = splitIntoSentences('Is this correct? Yes it is.');
+    assert.equal(sentences.length, 2);
+    assert.equal(sentences[0], 'Is this correct?');
+  });
+
+  it('returns single-sentence text as one element', () => {
+    const sentences = splitIntoSentences('No terminal punctuation here');
+    assert.equal(sentences.length, 1);
+    assert.equal(sentences[0], 'No terminal punctuation here');
+  });
+
+  it('filters empty results from blank input', () => {
+    const sentences = splitIntoSentences('');
+    assert.equal(sentences.length, 0);
+  });
+
+  it('handles multiple spaces between sentences', () => {
+    const sentences = splitIntoSentences('First.  Second.');
+    assert.equal(sentences.length, 2);
+  });
+
+  it('handles mixed punctuation', () => {
+    const sentences = splitIntoSentences('A. B! C?');
+    assert.equal(sentences.length, 3);
+  });
+});
+
+// =============================================================================
+// scoreSentence
+// =============================================================================
+describe('scoreSentence', () => {
+  it('returns zero scores for clean text', () => {
+    const scores = scoreSentence('I read the file and saw no errors.');
+    assert.equal(scores.speculation_language, 0);
+    assert.equal(scores.causality_language, 0);
+    assert.equal(scores.pseudo_quantification, 0);
+    assert.equal(scores.completeness_claim, 0);
+    assert.equal(scores.fabricated_source, 0);
+  });
+
+  it('returns 1 for speculation_language on speculative text', () => {
+    const scores = scoreSentence('I think this is broken.');
+    assert.equal(scores.speculation_language, 1);
+  });
+
+  it('returns 1 for causality_language on causal text', () => {
+    const scores = scoreSentence('The test breaks because the config is missing.');
+    assert.equal(scores.causality_language, 1);
+  });
+
+  it('scores multiple categories independently', () => {
+    const scores = scoreSentence('I think this breaks because of a bug.');
+    assert.equal(scores.speculation_language, 1);
+    assert.equal(scores.causality_language, 1);
+  });
+
+  it('returns 1 for pseudo_quantification on percentage text', () => {
+    // The percentage regex requires a word char after %; use '40%reduction' (no space).
+    const scores = scoreSentence('This achieves a 40%reduction in latency.');
+    assert.equal(scores.pseudo_quantification, 1);
+  });
+
+  it('returns 1 for completeness_claim on overclaim text', () => {
+    const scores = scoreSentence('Everything is fixed now.');
+    assert.equal(scores.completeness_claim, 1);
+  });
+});
+
+// =============================================================================
+// aggregateWeightedScore
+// =============================================================================
+describe('aggregateWeightedScore', () => {
+  it('returns 0 for all-zero scores', () => {
+    const scores = {
+      speculation_language: 0,
+      causality_language: 0,
+      pseudo_quantification: 0,
+      completeness_claim: 0,
+      fabricated_source: 0,
+    };
+    assert.equal(aggregateWeightedScore(scores, DEFAULT_WEIGHTS), 0);
+  });
+
+  it('returns 1 for all-one scores with default weights (weights sum to 1)', () => {
+    const scores = {
+      speculation_language: 1,
+      causality_language: 1,
+      pseudo_quantification: 1,
+      completeness_claim: 1,
+      fabricated_source: 1,
+    };
+    assert.equal(aggregateWeightedScore(scores, DEFAULT_WEIGHTS), 1);
+  });
+
+  it('returns the triggered category fractional weight for partial scores', () => {
+    const scores = {
+      speculation_language: 1,
+      causality_language: 0,
+      pseudo_quantification: 0,
+      completeness_claim: 0,
+      fabricated_source: 0,
+    };
+    // speculation weight = 0.25, all weights sum ≈ 1.0, so result ≈ 0.25
+    const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
+    assert.ok(Math.abs(result - 0.25) < 0.001, `Expected ~0.25, got ${result}`);
+  });
+
+  it('normalizes custom weights that do not sum to 1', () => {
+    const customWeights = { speculation_language: 2, causality_language: 2 };
+    const scores = { speculation_language: 1, causality_language: 1 };
+    // total = 4, weightSum = 4 → 4/4 = 1
+    assert.equal(aggregateWeightedScore(scores, customWeights), 1);
+  });
+
+  it('handles missing score keys as 0', () => {
+    const scores = { speculation_language: 1 };
+    const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
+    // Only speculation fires: 0.25 / 1.0 ≈ 0.25
+    assert.ok(Math.abs(result - 0.25) < 0.001, `Expected ~0.25, got ${result}`);
+  });
+
+  it('returns 0 when weights object is empty', () => {
+    const scores = { speculation_language: 1 };
+    assert.equal(aggregateWeightedScore(scores, {}), 0);
+  });
+
+  it('ignores unknown category keys in custom weights', () => {
+    const customWeights = { unknown_key: 99, speculation_language: 1 };
+    const scores = { speculation_language: 1 };
+    // unknown_key should be ignored; only speculation_language contributes
+    const result = aggregateWeightedScore(scores, customWeights);
+    assert.equal(result, 1);
+  });
+
+  it('ignores NaN weight values', () => {
+    const customWeights = { speculation_language: Number.NaN, causality_language: 0.5 };
+    const scores = { speculation_language: 1, causality_language: 1 };
+    // NaN weight for speculation_language is skipped; only causality contributes
+    const result = aggregateWeightedScore(scores, customWeights);
+    assert.equal(result, 1);
+  });
+
+  it('ignores negative weight values', () => {
+    const customWeights = { speculation_language: -1, causality_language: 0.5 };
+    const scores = { speculation_language: 1, causality_language: 1 };
+    // Negative weight for speculation_language is skipped; only causality contributes
+    const result = aggregateWeightedScore(scores, customWeights);
+    assert.equal(result, 1);
+  });
+});
+
+// =============================================================================
+// getLabelForScore
+// =============================================================================
+describe('getLabelForScore', () => {
+  it('returns GROUNDED for score < 0.30', () => {
+    assert.equal(getLabelForScore(0), 'GROUNDED');
+    assert.equal(getLabelForScore(0.1), 'GROUNDED');
+    assert.equal(getLabelForScore(0.29), 'GROUNDED');
+  });
+
+  it('returns UNCERTAIN for score between 0.30 and 0.60 inclusive', () => {
+    assert.equal(getLabelForScore(0.3), 'UNCERTAIN');
+    assert.equal(getLabelForScore(0.45), 'UNCERTAIN');
+    assert.equal(getLabelForScore(0.6), 'UNCERTAIN');
+  });
+
+  it('returns HALLUCINATED for score > 0.60', () => {
+    assert.equal(getLabelForScore(0.61), 'HALLUCINATED');
+    assert.equal(getLabelForScore(0.8), 'HALLUCINATED');
+    assert.equal(getLabelForScore(1), 'HALLUCINATED');
+  });
+});
+
+// =============================================================================
+// scoreText
+// =============================================================================
+describe('scoreText', () => {
+  it('returns one result per sentence', () => {
+    const text = 'First sentence. Second sentence. Third sentence.';
+    const results = scoreText(text);
+    assert.equal(results.length, 3);
+  });
+
+  it('result objects have required fields', () => {
+    const results = scoreText('This is clean.');
+    assert.equal(results.length, 1);
+    const r = results[0];
+    assert.ok('sentence' in r);
+    assert.ok('index' in r);
+    assert.ok('total' in r);
+    assert.ok('scores' in r);
+    assert.ok('aggregateScore' in r);
+    assert.ok('label' in r);
+  });
+
+  it('index starts at 0 and total reflects sentence count', () => {
+    const results = scoreText('One. Two. Three.');
+    assert.equal(results[0].index, 0);
+    assert.equal(results[2].index, 2);
+    assert.equal(results[0].total, 3);
+  });
+
+  it('clean sentence gets GROUNDED label', () => {
+    const results = scoreText('I ran the tests and they all passed.');
+    assert.equal(results[0].label, 'GROUNDED');
+    assert.equal(results[0].aggregateScore, 0);
+  });
+
+  it('causal sentence gets UNCERTAIN label', () => {
+    // causality_language weight = 0.30, so score = 0.30 → UNCERTAIN
+    const results = scoreText('The test breaks because the config is missing.');
+    const causalResult = results.find((r) => r.scores.causality_language === 1);
+    assert.ok(causalResult);
+    assert.equal(causalResult.label, 'UNCERTAIN');
+  });
+
+  it('highly flagged sentence gets HALLUCINATED label', () => {
+    // speculation (0.25) + causality (0.30) + completeness (0.20) = 0.75 → HALLUCINATED
+    const results = scoreText('I think everything is fixed because of the change.');
+    const flagged = results.find((r) => r.aggregateScore > 0.6);
+    assert.ok(flagged);
+    assert.equal(flagged.label, 'HALLUCINATED');
+  });
+
+  it('accepts custom weights', () => {
+    const customWeights = { speculation_language: 1 };
+    const results = scoreText('I think it works.', customWeights);
+    // 1 * 1 / 1 = 1.0 → HALLUCINATED
+    assert.equal(results[0].aggregateScore, 1);
+    assert.equal(results[0].label, 'HALLUCINATED');
+  });
+
+  it('handles single-sentence text', () => {
+    const results = scoreText('No issues detected');
+    assert.equal(results.length, 1);
+    assert.equal(results[0].index, 0);
+    assert.equal(results[0].total, 1);
+  });
+
+  it('each sentence is scored independently', () => {
+    const text = 'I think this is broken. The test passed with no errors.';
+    const results = scoreText(text);
+    assert.equal(results.length, 2);
+    assert.equal(results[0].scores.speculation_language, 1);
+    assert.equal(results[1].scores.speculation_language, 0);
+  });
+});
+
+// =============================================================================
+// DEFAULT_WEIGHTS
+// =============================================================================
+describe('DEFAULT_WEIGHTS', () => {
+  it('contains all five detection categories', () => {
+    assert.ok('speculation_language' in DEFAULT_WEIGHTS);
+    assert.ok('causality_language' in DEFAULT_WEIGHTS);
+    assert.ok('pseudo_quantification' in DEFAULT_WEIGHTS);
+    assert.ok('completeness_claim' in DEFAULT_WEIGHTS);
+    assert.ok('fabricated_source' in DEFAULT_WEIGHTS);
+  });
+
+  it('weights sum to 1.0', () => {
+    const sum = Object.values(DEFAULT_WEIGHTS).reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(sum - 1.0) < 1e-9, `Expected sum ~1.0, got ${sum}`);
+  });
+});
+
+// =============================================================================
+// loadWeights
+// =============================================================================
+describe('loadWeights', () => {
+  it('returns DEFAULT_WEIGHTS when no config file exists', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      assert.deepEqual(weights, DEFAULT_WEIGHTS);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('merges valid weight overrides from config file', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+        'module.exports = { weights: { speculation_language: 0.5, causality_language: 0.4 } };',
+      );
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      assert.equal(weights.speculation_language, 0.5);
+      assert.equal(weights.causality_language, 0.4);
+      // Other categories fall back to defaults
+      assert.equal(weights.pseudo_quantification, DEFAULT_WEIGHTS.pseudo_quantification);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('ignores invalid (non-numeric) weight values, falls back to default', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+        'module.exports = { weights: { speculation_language: "high", causality_language: 0.4 } };',
+      );
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      // Non-numeric value falls back to default
+      assert.equal(weights.speculation_language, DEFAULT_WEIGHTS.speculation_language);
+      assert.equal(weights.causality_language, 0.4);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('ignores unknown category keys from config', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+        'module.exports = { weights: { unknown_category: 0.99 } };',
+      );
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      assert.ok(!Object.hasOwn(weights, 'unknown_category'));
+      assert.deepEqual(weights, DEFAULT_WEIGHTS);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+
+  it('returns DEFAULT_WEIGHTS when config has no weights property', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    const originalCwd = process.cwd();
+    try {
+      fs.writeFileSync(path.join(tmpDir, '.hallucination-detectorrc.cjs'), 'module.exports = {};');
+      process.chdir(tmpDir);
+      const weights = loadWeights();
+      assert.deepEqual(weights, DEFAULT_WEIGHTS);
+    } finally {
+      process.chdir(originalCwd);
+      fs.rmSync(tmpDir, { recursive: true });
+    }
   });
 });

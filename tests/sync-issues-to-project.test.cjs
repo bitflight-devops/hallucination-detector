@@ -266,7 +266,7 @@ describe('sync-issues-to-project issue sync', () => {
     const scriptPath = join(__dirname, '..', '.claude', 'scripts', 'sync-issues-to-project.cjs');
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes("SKIP #"));
+    assert.ok(content.includes('SKIP #'));
     assert.ok(content.includes('unknown priority'));
   });
 
