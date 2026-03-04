@@ -7,6 +7,8 @@
  * - Writes framing text to stdout as additionalContext in SessionStart JSON output.
  * - Content mirrors the CLAUDE.md developer framing so plugin users receive the
  *   same behavioral constraints regardless of whether they have access to the repo.
+ * - When introspect mode is enabled in .hallucination-detectorrc.cjs, emits
+ *   guide-mode framing instead of enforcement-mode framing.
  *
  * Notes:
  * - CJS only (.cjs) — no runtime dependencies.
@@ -16,6 +18,11 @@
  */
 
 'use strict';
+
+const os = require('node:os');
+const path = require('node:path');
+
+const { loadConfig } = require('./hallucination-config.cjs');
 
 const FRAMING_TEXT = `# Hallucination Prevention — Behavioral Framing
 
@@ -34,6 +41,37 @@ What to do instead:
 
 Completeness:
 Do not claim "all", "every", "fully", "comprehensive", or "complete" unless you can enumerate exactly what was checked. Three items checked is "I checked A, B, and C" — not "comprehensive analysis".`;
+
+/**
+ * Build the guide-mode framing text used when introspection mode is active.
+ *
+ * @param {string} logPath - Absolute path to the introspection JSONL log file.
+ * @returns {string}
+ */
+function buildIntrospectFramingText(logPath) {
+  return `# Hallucination Detector — Introspection Mode Active
+
+The hallucination detector is logging patterns but not blocking responses.
+
+When you notice yourself using speculation language, ungrounded causality, or completeness claims, you can self-correct. The detector will log what it finds for later analysis.
+
+Categories being tracked:
+- speculation_language — hedging language without cited evidence ("probably", "likely", "I think", "seems", "might", "should be", "I believe", "presumably")
+- causality_language — causal claims without observed evidence ("because", "caused by", "due to", "therefore", etc.)
+- pseudo_quantification — made-up percentages, quality scores (N/10), or metrics not derived from actual data
+- completeness_claim — overclaims about scope ("all files checked", "fully resolved", "comprehensive", etc.)
+
+Introspection log: ${logPath}
+
+To annotate a detection as a false positive:
+  node scripts/hallucination-annotate.cjs ${logPath} --line N --label fp
+
+To flag text that should have triggered but did not:
+  node scripts/hallucination-annotate.cjs ${logPath} --add-negative --text "..." --category speculation_language
+
+To view a summary of detections and annotations:
+  node scripts/hallucination-annotate.cjs ${logPath} --summary`;
+}
 
 /**
  * Read and discard stdin so the process does not hang when Claude Code pipes input.
@@ -67,7 +105,21 @@ function emitSessionStartContext(additionalContext) {
 
 function main() {
   drainStdin();
-  emitSessionStartContext(FRAMING_TEXT);
+
+  let framingText = FRAMING_TEXT;
+  try {
+    const config = loadConfig();
+    if (config.introspect) {
+      const logPath =
+        config.introspectOutputPath ||
+        path.join(os.tmpdir(), 'hallucination-detector-introspect.jsonl');
+      framingText = buildIntrospectFramingText(logPath);
+    }
+  } catch {
+    // loadConfig failure is non-fatal — fall through to default enforcement framing
+  }
+
+  emitSessionStartContext(framingText);
   process.exit(0);
 }
 
@@ -75,4 +127,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { emitSessionStartContext, FRAMING_TEXT };
+module.exports = { emitSessionStartContext, buildIntrospectFramingText, FRAMING_TEXT };
