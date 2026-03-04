@@ -80,6 +80,67 @@ describe('speculation language', () => {
 });
 
 // =============================================================================
+// Absolute certainty language
+// =============================================================================
+describe('absolute certainty language', () => {
+  it('flags "definitely"', () => {
+    const matches = findTriggerMatches('This definitely causes the error.');
+    const kinds = matches.map((m) => m.kind);
+    assert.ok(kinds.includes('absolute_certainty'));
+  });
+
+  it('flags "absolutely"', () => {
+    const matches = findTriggerMatches('The bug is absolutely in the network layer.');
+    const kinds = matches.map((m) => m.kind);
+    assert.ok(kinds.includes('absolute_certainty'));
+  });
+
+  it('flags "without a doubt"', () => {
+    const matches = findTriggerMatches('Without a doubt this is a memory leak.');
+    const kinds = matches.map((m) => m.kind);
+    assert.ok(kinds.includes('absolute_certainty'));
+  });
+
+  it('flags "no doubt"', () => {
+    const matches = findTriggerMatches('There is no doubt that this is the issue.');
+    const kinds = matches.map((m) => m.kind);
+    assert.ok(kinds.includes('absolute_certainty'));
+  });
+
+  it('does not flag questions', () => {
+    const matches = findTriggerMatches('Are you definitely sure about that?');
+    const certMatches = matches.filter((m) => m.kind === 'absolute_certainty');
+    assert.equal(certMatches.length, 0);
+  });
+
+  it('suppresses when evidence is nearby', () => {
+    const matches = findTriggerMatches(
+      'I ran the test and it definitely fails with error code 127 in the output.',
+    );
+    const certMatches = matches.filter(
+      (m) => m.kind === 'absolute_certainty' && m.evidence === 'definitely',
+    );
+    assert.equal(certMatches.length, 0);
+  });
+
+  it('does not flag inside code blocks', () => {
+    const matches = findTriggerMatches('Here is the fix:\n```\nif (definitely) return;\n```\n');
+    const certMatches = matches.filter(
+      (m) => m.kind === 'absolute_certainty' && m.evidence === 'definitely',
+    );
+    assert.equal(certMatches.length, 0);
+  });
+
+  it('does not flag inline code', () => {
+    const matches = findTriggerMatches('Set the flag to `definitely` in the config.');
+    const certMatches = matches.filter(
+      (m) => m.kind === 'absolute_certainty' && m.evidence === 'definitely',
+    );
+    assert.equal(certMatches.length, 0);
+  });
+});
+
+// =============================================================================
 // Causality language
 // =============================================================================
 describe('causality language', () => {
@@ -357,6 +418,7 @@ describe('scoreSentence', () => {
     assert.equal(scores.pseudo_quantification, 0);
     assert.equal(scores.completeness_claim, 0);
     assert.equal(scores.fabricated_source, 0);
+    assert.equal(scores.absolute_certainty, 0);
   });
 
   it('returns 1 for speculation_language on speculative text', () => {
@@ -398,6 +460,7 @@ describe('aggregateWeightedScore', () => {
       pseudo_quantification: 0,
       completeness_claim: 0,
       fabricated_source: 0,
+      absolute_certainty: 0,
     };
     assert.equal(aggregateWeightedScore(scores, DEFAULT_WEIGHTS), 0);
   });
@@ -409,6 +472,7 @@ describe('aggregateWeightedScore', () => {
       pseudo_quantification: 1,
       completeness_claim: 1,
       fabricated_source: 1,
+      absolute_certainty: 1,
     };
     assert.equal(aggregateWeightedScore(scores, DEFAULT_WEIGHTS), 1);
   });
@@ -420,10 +484,11 @@ describe('aggregateWeightedScore', () => {
       pseudo_quantification: 0,
       completeness_claim: 0,
       fabricated_source: 0,
+      absolute_certainty: 0,
     };
-    // speculation weight = 0.25, all weights sum ≈ 1.0, so result ≈ 0.25
+    // speculation weight = 0.20, all weights sum ≈ 1.0, so result ≈ 0.20
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    assert.ok(Math.abs(result - 0.25) < 0.001, `Expected ~0.25, got ${result}`);
+    assert.ok(Math.abs(result - 0.2) < 0.001, `Expected ~0.20, got ${result}`);
   });
 
   it('normalizes custom weights that do not sum to 1', () => {
@@ -436,8 +501,8 @@ describe('aggregateWeightedScore', () => {
   it('handles missing score keys as 0', () => {
     const scores = { speculation_language: 1 };
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    // Only speculation fires: 0.25 / 1.0 ≈ 0.25
-    assert.ok(Math.abs(result - 0.25) < 0.001, `Expected ~0.25, got ${result}`);
+    // Only speculation fires: 0.20 / 1.0 ≈ 0.20
+    assert.ok(Math.abs(result - 0.2) < 0.001, `Expected ~0.20, got ${result}`);
   });
 
   it('returns 0 when weights object is empty', () => {
@@ -528,17 +593,17 @@ describe('scoreText', () => {
     assert.equal(results[0].aggregateScore, 0);
   });
 
-  it('causal sentence gets UNCERTAIN label', () => {
-    // causality_language weight = 0.30, so score = 0.30 → UNCERTAIN
+  it('causal sentence gets flagged', () => {
+    // causality_language weight = 0.25, so score = 0.25 → GROUNDED (below 0.30 threshold)
     const results = scoreText('The test breaks because the config is missing.');
     const causalResult = results.find((r) => r.scores.causality_language === 1);
     assert.ok(causalResult);
-    assert.equal(causalResult.label, 'UNCERTAIN');
+    assert.equal(causalResult.label, 'GROUNDED');
   });
 
   it('highly flagged sentence gets HALLUCINATED label', () => {
-    // speculation (0.25) + causality (0.30) + completeness (0.20) = 0.75 → HALLUCINATED
-    const results = scoreText('I think everything is fixed because of the change.');
+    // speculation (0.20) + causality (0.25) + completeness (0.15) + absolute_certainty (0.15) = 0.75 → HALLUCINATED
+    const results = scoreText('I think everything is definitely fixed because of the change.');
     const flagged = results.find((r) => r.aggregateScore > 0.6);
     assert.ok(flagged);
     assert.equal(flagged.label, 'HALLUCINATED');
@@ -572,12 +637,13 @@ describe('scoreText', () => {
 // DEFAULT_WEIGHTS
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
-  it('contains all five detection categories', () => {
+  it('contains all six detection categories', () => {
     assert.ok('speculation_language' in DEFAULT_WEIGHTS);
     assert.ok('causality_language' in DEFAULT_WEIGHTS);
     assert.ok('pseudo_quantification' in DEFAULT_WEIGHTS);
     assert.ok('completeness_claim' in DEFAULT_WEIGHTS);
     assert.ok('fabricated_source' in DEFAULT_WEIGHTS);
+    assert.ok('absolute_certainty' in DEFAULT_WEIGHTS);
   });
 
   it('weights sum to 1.0', () => {

@@ -452,6 +452,30 @@ function findTriggerMatches(text) {
     matches.push({ kind: 'completeness_claim', evidence: m[0].trim() });
   }
 
+  // 5) Absolute certainty claims (unqualified assertions of certainty without evidence)
+  const absoluteCertaintyPhrases = [
+    'definitely',
+    'absolutely',
+    'certainly',
+    'unquestionably',
+    'undoubtedly',
+    'without a doubt',
+    'for certain',
+    '100% sure',
+    'no doubt',
+    'beyond doubt',
+    'there is no question',
+    'guaranteed',
+    'without question',
+  ];
+  for (const phrase of absoluteCertaintyPhrases) {
+    const idx = lower.indexOf(phrase);
+    if (idx === -1) continue;
+    if (isIndexWithinQuestion(haystack, idx)) continue;
+    if (hasEvidenceNearby(haystack, idx, rawText)) continue;
+    matches.push({ kind: 'absolute_certainty', evidence: phrase });
+  }
+
   return matches;
 }
 
@@ -474,11 +498,12 @@ function splitIntoSentences(text) {
  * Must sum to 1.0 for aggregate scores to be in [0, 1].
  */
 const DEFAULT_WEIGHTS = {
-  speculation_language: 0.25,
-  causality_language: 0.3,
+  speculation_language: 0.2,
+  causality_language: 0.25,
   pseudo_quantification: 0.15,
-  completeness_claim: 0.2,
+  completeness_claim: 0.15,
   fabricated_source: 0.1,
+  absolute_certainty: 0.15,
 };
 
 /**
@@ -493,6 +518,7 @@ function scoreSentence(sentence) {
     pseudo_quantification: 0,
     completeness_claim: 0,
     fabricated_source: 0,
+    absolute_certainty: 0,
   };
   for (const match of matches) {
     if (Object.hasOwn(scores, match.kind)) {
