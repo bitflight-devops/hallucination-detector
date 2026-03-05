@@ -4,8 +4,9 @@
 
 | Context | Tool |
 |---------|------|
-| Quick one-off command | `gh label` CLI |
-| Scripted / multi-step | `octokit` (full SDK) via `.cjs` scripts |
+| Quick one-off | `node .claude/scripts/gh-api.cjs label list` / `label create` |
+| Scripted / multi-step | `createGitHubClient()` in `.cjs` scripts |
+| Bulk setup | `node .claude/skills/gh/scripts/github-project-setup.cjs labels` |
 
 ---
 
@@ -46,35 +47,23 @@ The automation script also manages the standard **three-axis** labels below.
 
 ---
 
-## gh CLI — Quick Commands
+## Quick Commands
 
 ```bash
 # List all labels
-gh label list -R bitflight-devops/hallucination-detector
+node .claude/scripts/gh-api.cjs label list
 
 # Create a label
-gh label create "priority:p1" \
-  --color "E99695" \
-  --description "High priority — should be done next" \
-  -R bitflight-devops/hallucination-detector
-
-# Apply labels to an issue
-gh issue edit 42 -R bitflight-devops/hallucination-detector \
-  --add-label "status:in-progress" \
-  --remove-label "status:needs-grooming"
+node .claude/scripts/gh-api.cjs label create --name "priority:p1" --color "E99695" --description "High priority"
 ```
 
 ---
 
-## Octokit — Scripted Operations (JavaScript)
-
-Use `octokit` (full SDK) in `.cjs` scripts — never shell out to `gh`.
+## Scripted Operations (JavaScript)
 
 ```javascript
-const { Octokit } = require('octokit');
-const { OWNER, REPO } = require('../../scripts/lib/story-helpers.cjs');
-
-const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+const { createGitHubClient, OWNER, REPO } = require('./.claude/scripts/lib/github-client.cjs');
+const octokit = createGitHubClient();
 
 // Create a label
 await octokit.rest.issues.createLabel({
@@ -122,5 +111,4 @@ node .claude/skills/gh/scripts/github-project-setup.cjs labels --force
 | P2 | `priority:p2` |
 | Ideas | `priority:idea` |
 
-SOURCE: GitHub CLI label documentation — <https://cli.github.com/manual/gh_label> (accessed 2026-02-21)
 SOURCE: Octokit.js REST — <https://github.com/octokit/rest.js> (accessed 2026-02-21)

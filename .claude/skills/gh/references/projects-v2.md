@@ -1,90 +1,44 @@
 # GitHub Projects V2 — Management
 
-GitHub Projects V2 is the current projects system (board, table, roadmap views). Managed via `gh project` CLI or GraphQL API.
+GitHub Projects V2 is the current projects system (board, table, roadmap views). Managed via GraphQL API through `octokit.graphql()`.
 
-**Scope requirement**: `GITHUB_TOKEN` needs `project` scope. Verify with:
-
-```bash
-gh auth status
-```
+**Scope requirement**: `GITHUB_TOKEN` needs `project` scope.
 
 ## When to Use What
 
 | Context | Tool |
 |---------|------|
-| Quick one-off | `gh project` CLI |
-| Scripted / multi-step | GraphQL via `octokit.graphql()` in `.cjs` scripts |
+| Discover project IDs/fields | `node .claude/scripts/sync-issues-to-project.cjs --discover` |
+| Sync issues to board | `node .claude/scripts/sync-issues-to-project.cjs` |
+| Scripted / multi-step | `createGitHubClient()` + `octokit.graphql()` |
 
 ---
 
-## gh CLI — Quick Commands
-
-### Project Lifecycle
+## Quick Commands
 
 ```bash
-# Create for an org
-gh project create --owner bitflight-devops --title "Hallucination Detector Backlog"
+# Discover project IDs and field options
+node .claude/scripts/sync-issues-to-project.cjs --discover
 
-# List projects
-gh project list --owner bitflight-devops
+# Sync issues to project (dry-run)
+node .claude/scripts/sync-issues-to-project.cjs --dry-run
 
-# Link project to repository
-gh project link 1 --owner bitflight-devops --repo bitflight-devops/hallucination-detector
-
-# View project
-gh project view 1 --owner bitflight-devops
-```
-
-### Custom Fields
-
-```bash
-# List fields
-gh project field-list 1 --owner bitflight-devops --format json
-
-# Create Priority single-select field
-gh project field-create 1 --owner bitflight-devops \
-  --name "Priority" \
-  --data-type SINGLE_SELECT \
-  --single-select-options "P0,P1,P2,Idea"
-
-# Create Status field
-gh project field-create 1 --owner bitflight-devops \
-  --name "Status" \
-  --data-type SINGLE_SELECT \
-  --single-select-options "Backlog,Grooming,In Progress,Review,Done"
-```
-
-### Adding Items
-
-```bash
-# Add issue to project
-gh project item-add 1 --owner bitflight-devops \
-  --url https://github.com/bitflight-devops/hallucination-detector/issues/42
-
-# List items
-gh project item-list 1 --owner bitflight-devops --format json
-```
-
-### Editing Item Fields
-
-Field values require node IDs — retrieve from `field-list` and `item-list`.
-
-```bash
-gh project item-edit \
-  --project-id <project-node-id> \
-  --id <item-node-id> \
-  --field-id <field-node-id> \
-  --single-select-option-id <option-node-id>
+# Full project setup (labels + instructions)
+node .claude/skills/gh/scripts/github-project-setup.cjs setup
 ```
 
 ---
 
-## GraphQL — Get Node IDs
+## Scripted Operations (JavaScript)
 
-```bash
-# Get project node ID and field option IDs (try org first, then user)
-gh api graphql -f query='
-{
+Use `octokit.graphql()` for Projects V2 operations.
+
+```javascript
+const { createGitHubClient } = require('./.claude/scripts/lib/github-client.cjs');
+const octokit = createGitHubClient();
+
+// Get project node ID and field option IDs
+const result = await octokit.graphql(`{
   organization(login: "bitflight-devops") {
     projectV2(number: 1) {
       id
@@ -99,19 +53,7 @@ gh api graphql -f query='
       }
     }
   }
-}'
-```
-
----
-
-## Octokit — Scripted Operations (JavaScript)
-
-Use `octokit.graphql()` for Projects V2 operations.
-
-```javascript
-const { Octokit } = require('octokit');
-
-const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+}`);
 
 // Add issue to project
 const { addProjectV2ItemById } = await octokit.graphql(`
@@ -142,21 +84,6 @@ await octokit.graphql(`
 
 ---
 
-## Automation Script
-
-```bash
-# Discover project IDs and field options
-node .claude/scripts/sync-issues-to-project.cjs --discover
-
-# Sync issues to project (dry-run)
-node .claude/scripts/sync-issues-to-project.cjs --dry-run
-
-# Full project setup (labels + instructions)
-node .claude/skills/gh/scripts/github-project-setup.cjs setup
-```
-
----
-
 ## Standard Project Structure
 
 ```text
@@ -171,6 +98,5 @@ Project: "Hallucination Detector Backlog"
     - Roadmap (grouped by Milestone)
 ```
 
-SOURCE: GitHub CLI Projects documentation — <https://cli.github.com/manual/gh_project> (accessed 2026-02-21)
 SOURCE: GitHub Projects V2 GraphQL API — <https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects> (accessed 2026-02-21)
 SOURCE: Octokit GraphQL — <https://github.com/octokit/graphql.js> (accessed 2026-02-21)

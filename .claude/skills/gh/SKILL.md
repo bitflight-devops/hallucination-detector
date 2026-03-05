@@ -1,176 +1,106 @@
 ---
 name: gh
-description: "GitHub CLI setup and project management automation for the hallucination-detector repo. Provides gh CLI auto-installer with SHA256 verification, and octokit-based project management (labels, milestones, issues, Projects V2). Use when gh command not found, need GitHub API access, or managing issues/milestones/projects."
+description: "GitHub API access and project management automation for the hallucination-detector repo. Uses octokit with proxy-aware client for all GitHub operations — issues, PRs, labels, milestones, Projects V2. No gh CLI required."
 ---
-# GitHub CLI (gh) — Setup and Usage
+# GitHub API — Setup and Usage
 
 ## Purpose
 
-Ensures the GitHub CLI (`gh`) is available and provides project management automation using `octokit` (full SDK) for the hallucination-detector repository.
+Provides programmatic GitHub API access for the hallucination-detector repo using `octokit` (full SDK) with automatic proxy support. All operations use Node.js scripts — no `gh` CLI binary is needed.
 
 ## When to Use
 
-- `gh` command not found
-- Need to interact with GitHub API (issues, PRs, releases, workflows)
-- Managing GitHub Issues, Milestones, or Labels
-- Syncing issues to Projects V2
-
----
-
-## Installation
-
-If `gh` is not installed, run the setup script:
-
-```bash
-node .claude/skills/gh/scripts/setup-gh.cjs
-```
-
-The script:
-
-1. Checks if `gh` is already installed via PATH lookup
-2. Detects platform (Linux, macOS, Windows) and architecture
-3. Fetches the latest release from GitHub Releases API
-4. Downloads the correct archive with SHA256 verification
-5. Extracts and installs the binary to a writable PATH directory
-6. Uses `GITHUB_TOKEN` for authenticated requests; falls back to anonymous on 401/403
-
-**CLI options:**
-
-```text
---force     Reinstall even if already at latest version
---dry-run   Show what would happen without installing
---bin-dir   Override install directory (default: auto-detect from PATH)
-```
+- Need to interact with GitHub API (issues, PRs, labels, milestones)
+- Creating or listing pull requests
+- Managing GitHub Issues, Projects V2, or Labels
+- Running in a proxy environment where direct DNS to `api.github.com` is unavailable
 
 ---
 
 ## Authentication
 
-`GITHUB_TOKEN` environment variable provides automatic authentication for both `gh` CLI and `octokit` scripts. No manual `gh auth login` needed.
+`GITHUB_TOKEN` environment variable provides authentication. All scripts read it automatically via `createGitHubClient()`.
 
-```bash
-# Verify authentication
-gh auth status
+```javascript
+const { createGitHubClient, OWNER, REPO } = require('./.claude/scripts/lib/github-client.cjs');
+const octokit = createGitHubClient();
 ```
+
+The client auto-detects `HTTPS_PROXY` / `HTTP_PROXY` env vars and routes requests through the egress proxy via `undici.ProxyAgent`. No manual proxy configuration needed.
 
 ---
 
-## Project Management — Automation Script
+## Scripts
 
-For multi-step operations (label setup, milestone management, issue management), use the octokit-based automation script:
+### General-purpose GitHub API — `gh-api.cjs`
 
 ```bash
-# Full project setup (labels + next-steps instructions)
+# Issues
+node .claude/scripts/gh-api.cjs issue list
+node .claude/scripts/gh-api.cjs issue create --title "feat: add X" --label "type:feature" --label "priority:p1"
+node .claude/scripts/gh-api.cjs issue view 42
+node .claude/scripts/gh-api.cjs issue comment 42 --body "Implemented in PR #45."
+
+# Pull Requests
+node .claude/scripts/gh-api.cjs pr list
+node .claude/scripts/gh-api.cjs pr create --title "feat: add X" --base main --body "Details"
+
+# Labels
+node .claude/scripts/gh-api.cjs label list
+node .claude/scripts/gh-api.cjs label create --name "priority:p0" --color "D73A4A" --description "Critical"
+```
+
+All output is JSON to stdout. Errors go to stderr with exit code 1.
+
+### Pull Request creation — `create-pr.cjs`
+
+```bash
+# Auto-generates body from commit log
+node .claude/scripts/create-pr.cjs --title "feat: add proxy support"
+
+# Explicit body
+node .claude/scripts/create-pr.cjs --title "fix: timeout" --base main --body "Details here"
+
+# Body from file (supports stdin piping)
+node .claude/scripts/create-pr.cjs --title "chore: deps" --body-file ./pr-body.md
+```
+
+Auto-detects the current branch as `head`. Prints the PR URL to stdout on success.
+
+### Project management — `github-project-setup.cjs`
+
+```bash
+# Full project setup (labels + instructions)
 node .claude/skills/gh/scripts/github-project-setup.cjs setup
 
-# Labels only
+# Labels
 node .claude/skills/gh/scripts/github-project-setup.cjs labels
 node .claude/skills/gh/scripts/github-project-setup.cjs labels --force
 
-# Milestone management
+# Milestones
 node .claude/skills/gh/scripts/github-project-setup.cjs milestone list
 node .claude/skills/gh/scripts/github-project-setup.cjs milestone create --title "v1.0" --due 2026-03-31
 node .claude/skills/gh/scripts/github-project-setup.cjs milestone start --number 1
-node .claude/skills/gh/scripts/github-project-setup.cjs milestone start --number 1 --dry-run
 node .claude/skills/gh/scripts/github-project-setup.cjs milestone close --number 1
 
-# Issue management
+# Issues
 node .claude/skills/gh/scripts/github-project-setup.cjs issue list
-node .claude/skills/gh/scripts/github-project-setup.cjs issue list --priority p1
-node .claude/skills/gh/scripts/github-project-setup.cjs issue create --title "feat: add feature X" --priority-label priority:p1 --type-label type:feature
-node .claude/skills/gh/scripts/github-project-setup.cjs issue create --title "fix: bug Y" --body "Details" --milestone 1
-```
-
-The script uses `octokit` (full SDK, already in devDependencies) for all GitHub API calls. No CLI wrappers.
-
----
-
-## Common gh CLI Commands
-
-These require `gh` to be installed (run `setup-gh.cjs` first).
-
-### Issues
-
-```bash
-# List issues
-gh issue list -R bitflight-devops/hallucination-detector
-
-# List by label
-gh issue list -R bitflight-devops/hallucination-detector --label "priority:p1" --state open
-
-# Create issue
-gh issue create -R bitflight-devops/hallucination-detector \
-  --title "feat: add feature X" \
-  --label "priority:p1" --label "type:feature" \
-  --milestone "v1.0"
-
-# View issue
-gh issue view <number> -R bitflight-devops/hallucination-detector
-```
-
-### Pull Requests
-
-```bash
-# List open PRs
-gh pr list -R bitflight-devops/hallucination-detector
-
-# View PR details
-gh pr view <number> -R bitflight-devops/hallucination-detector
-
-# Check PR CI status
-gh pr checks <number> -R bitflight-devops/hallucination-detector
-```
-
-### Labels
-
-```bash
-# List all labels
-gh label list -R bitflight-devops/hallucination-detector
-
-# Create label
-gh label create "priority:p1" --color "E99695" \
-  --description "High priority" -R bitflight-devops/hallucination-detector
-```
-
-### Milestones
-
-```bash
-# List milestones
-gh api repos/bitflight-devops/hallucination-detector/milestones
-
-# Create milestone
-gh api repos/bitflight-devops/hallucination-detector/milestones \
-  -X POST -f title="v1.0" -f due_on="2026-03-31T00:00:00Z"
-```
-
-### Workflow Runs
-
-```bash
-# List recent runs
-gh run list -R bitflight-devops/hallucination-detector --limit 5
-
-# View failed job logs
-gh run view <run-id> -R bitflight-devops/hallucination-detector --log-failed
+node .claude/skills/gh/scripts/github-project-setup.cjs issue create --title "feat: add X" --priority-label priority:p1 --type-label type:feature
 ```
 
 ---
 
-## Programmatic Usage (octokit)
+## Shared Client — `github-client.cjs`
 
-For scripted operations in `.cjs` files, use `octokit` directly:
+All scripts import from `.claude/scripts/lib/github-client.cjs`:
 
 ```javascript
-const { Octokit } = require('octokit');
-const { OWNER, REPO } = require('../../scripts/lib/story-helpers.cjs');
-
-const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+const { createGitHubClient, OWNER, REPO } = require('./.claude/scripts/lib/github-client.cjs');
+const octokit = createGitHubClient();
 
 // REST API
-const allIssues = await octokit.paginate(octokit.rest.issues.listForRepo, {
-  owner: OWNER,
-  repo: REPO,
-  state: 'open',
-  per_page: 100,
+const issues = await octokit.paginate(octokit.rest.issues.listForRepo, {
+  owner: OWNER, repo: REPO, state: 'open', per_page: 100,
 });
 
 // GraphQL (for Projects V2)
@@ -183,32 +113,16 @@ const result = await octokit.graphql(`
 `, { projectId, contentId: issueNodeId });
 ```
 
----
-
-## Output Formatting
-
-```bash
-# JSON output
-gh pr list -R bitflight-devops/hallucination-detector --json number,title,state
-
-# JQ filtering
-gh issue list -R bitflight-devops/hallucination-detector --json number,title --jq '.[].title'
-```
-
----
-
-## Reference Files
-
-- [labels.md](./references/labels.md) — Label taxonomy, color codes, bulk setup
-- [milestones.md](./references/milestones.md) — Milestone CRUD, naming conventions
-- [projects-v2.md](./references/projects-v2.md) — GitHub Projects V2 commands, GraphQL queries
-- [issue-stories.md](./references/issue-stories.md) — Issue as story format, body template, lifecycle
+The client handles:
+- `GITHUB_TOKEN` validation (exits with error if missing)
+- Proxy detection (`HTTPS_PROXY` / `HTTP_PROXY` env vars)
+- `undici.ProxyAgent` configuration for environments where DNS to `api.github.com` is unavailable
 
 ---
 
 ## Existing Project Scripts
 
-These scripts in `.claude/scripts/` also use octokit for GitHub operations:
+These scripts in `.claude/scripts/` also use the shared client:
 
 - `sync-issues-to-project.cjs` — Sync issues to Projects V2 board
 - `rebuild-issue-bodies.cjs` — Rebuild issue bodies from backlog items
@@ -216,10 +130,17 @@ These scripts in `.claude/scripts/` also use octokit for GitHub operations:
 
 ---
 
+## Reference Files
+
+- [labels.md](./references/labels.md) — Label taxonomy, color codes, bulk setup
+- [milestones.md](./references/milestones.md) — Milestone CRUD, naming conventions
+- [projects-v2.md](./references/projects-v2.md) — GitHub Projects V2, GraphQL queries
+- [issue-stories.md](./references/issue-stories.md) — Issue as story format, body template, lifecycle
+
+---
+
 ## Sources
 
-- [GitHub CLI Manual](https://cli.github.com/manual) — official reference
-- [GitHub CLI Releases](https://github.com/cli/cli/releases) — binary downloads
 - [GitHub REST API — Issues](https://docs.github.com/en/rest/issues) — milestones, labels, issues
 - [GitHub Projects V2 API](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects) — GraphQL API
 - [Octokit.js](https://github.com/octokit/octokit.js) — full SDK

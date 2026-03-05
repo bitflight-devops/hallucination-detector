@@ -72,46 +72,32 @@ Open → label: status:needs-grooming
 
 ---
 
-## gh CLI — Quick Commands
+## Quick Commands
 
 ```bash
 # Create issue
-gh issue create -R bitflight-devops/hallucination-detector \
-  --title "fix: correct task_output variable in log_functions.sh" \
-  --body "..." \
-  --label "priority:p1" \
-  --label "type:bug" \
-  --label "status:needs-grooming" \
-  --milestone "v1.0 — Detection Foundation"
+node .claude/scripts/gh-api.cjs issue create \
+  --title "fix: correct task_output variable" \
+  --label "priority:p1" --label "type:bug" --label "status:needs-grooming" \
+  --body "## Story ..."
 
-# List open issues by priority
-gh issue list -R bitflight-devops/hallucination-detector \
-  --label "priority:p1" --state open \
-  --json number,title,labels,milestone
+# List open issues
+node .claude/scripts/gh-api.cjs issue list
 
 # View issue
-gh issue view 42 -R bitflight-devops/hallucination-detector
+node .claude/scripts/gh-api.cjs issue view 42
 
-# Close with comment
-gh issue close 42 -R bitflight-devops/hallucination-detector \
-  --comment "Implemented in PR #45."
-
-# Edit labels
-gh issue edit 42 -R bitflight-devops/hallucination-detector \
-  --add-label "status:in-progress" --remove-label "status:needs-grooming"
+# Add comment
+node .claude/scripts/gh-api.cjs issue comment 42 --body "Implemented in PR #45."
 ```
 
 ---
 
-## Octokit — Scripted Operations (JavaScript)
-
-Use `octokit` (full SDK) in `.cjs` scripts — never shell out to `gh`.
+## Scripted Operations (JavaScript)
 
 ```javascript
-const { Octokit } = require('octokit');
-const { OWNER, REPO } = require('../../scripts/lib/story-helpers.cjs');
-
-const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+const { createGitHubClient, OWNER, REPO } = require('./.claude/scripts/lib/github-client.cjs');
+const octokit = createGitHubClient();
 
 // Create issue with labels and milestone
 const { data: issue } = await octokit.rest.issues.create({
@@ -160,5 +146,4 @@ node .claude/skills/gh/scripts/github-project-setup.cjs issue create \
 | `last-completed` frontmatter | Issue closed date |
 
 SOURCE: GitHub Issues documentation — <https://docs.github.com/en/issues/tracking-your-work-with-issues> (accessed 2026-02-21)
-SOURCE: GitHub CLI issue manual — <https://cli.github.com/manual/gh_issue> (accessed 2026-02-21)
 SOURCE: Octokit.js REST — <https://octokit.github.io/rest.js/v20#issues-create> (accessed 2026-02-21)

@@ -18,8 +18,7 @@
  *   GITHUB_TOKEN — GitHub personal access token with repo scope
  */
 
-const { Octokit } = require('octokit');
-const { OWNER, REPO } = require('../../../scripts/lib/story-helpers.cjs');
+const { createGitHubClient, OWNER, REPO } = require('../../../scripts/lib/github-client.cjs');
 
 // ---------------------------------------------------------------------------
 // CLI argument helpers
@@ -487,13 +486,7 @@ function usage(message) {
  * @returns {Promise<void>}
  */
 async function main() {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) {
-    console.error('ERROR: GITHUB_TOKEN is not set');
-    process.exit(1);
-  }
-
-  const octokit = new Octokit({ auth: token });
+  const octokit = createGitHubClient();
 
   if (command === 'labels') {
     const force = getFlag('--force');
