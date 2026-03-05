@@ -2,10 +2,10 @@
 
 ## When to Use What
 
-| Context | Tool |
-|---------|------|
-| Quick one-off | `github-project-setup.cjs milestone list` |
-| Scripted / multi-step | `createGitHubClient()` in `.cjs` scripts |
+| Context               | Tool                                      |
+| --------------------- | ----------------------------------------- |
+| Quick one-off         | `github-project-setup.cjs milestone list` |
+| Scripted / multi-step | `createGitHubClient()` in `.cjs` scripts  |
 
 ---
 

@@ -1,1 +1,1 @@
-{ "embeddedLanguageFormatting": "off", "endOfLine": "lf", "printWidth": 120 }
+{ 'embeddedLanguageFormatting': 'off', 'endOfLine': 'lf', 'printWidth': 120, 'singleQuote': true }

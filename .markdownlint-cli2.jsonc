@@ -5,7 +5,7 @@
   "config": {
     "MD003": false,
     "MD007": {
-      "indent": 2
+      "indent": 2,
     },
     "MD001": false,
     "MD022": false,
@@ -42,6 +42,6 @@
     "ol-prefix": false,
     "strong-style": false,
     "ul-indent": false,
-    "MD040": false
-  }
+    "MD040": false,
+  },
 }

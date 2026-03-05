@@ -6,11 +6,11 @@ GitHub Projects V2 is the current projects system (board, table, roadmap views).
 
 ## When to Use What
 
-| Context | Tool |
-|---------|------|
+| Context                     | Tool                                                         |
+| --------------------------- | ------------------------------------------------------------ |
 | Discover project IDs/fields | `node .claude/scripts/sync-issues-to-project.cjs --discover` |
-| Sync issues to board | `node .claude/scripts/sync-issues-to-project.cjs` |
-| Scripted / multi-step | `createGitHubClient()` + `octokit.graphql()` |
+| Sync issues to board        | `node .claude/scripts/sync-issues-to-project.cjs`            |
+| Scripted / multi-step       | `createGitHubClient()` + `octokit.graphql()`                 |
 
 ---
 

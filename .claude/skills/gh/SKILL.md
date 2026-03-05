@@ -2,6 +2,7 @@
 name: gh
 description: "GitHub API access and project management automation for the hallucination-detector repo. Uses octokit with proxy-aware client for all GitHub operations — issues, PRs, labels, milestones, Projects V2. No gh CLI required."
 ---
+
 # GitHub API — Setup and Usage
 
 ## Purpose
@@ -140,6 +141,7 @@ const result = await octokit.graphql(`
 ```
 
 The client handles:
+
 - `GITHUB_TOKEN` validation (exits with error if missing)
 - Proxy detection (`HTTPS_PROXY` / `HTTP_PROXY` env vars)
 - `undici.ProxyAgent` configuration for environments where DNS to `api.github.com` is unavailable

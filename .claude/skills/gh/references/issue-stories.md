@@ -135,15 +135,15 @@ node .claude/skills/gh/scripts/github-project-setup.cjs issue create \
 
 ## Backlog Item ↔ GitHub Issue Field Mapping
 
-| Per-item file field | GitHub Issue field |
-|---|----|
-| `name` frontmatter | Issue title |
-| `metadata.priority` frontmatter (P0/P1/P2) | `priority:*` label |
-| Item description body | Issue body |
-| `metadata.status` frontmatter | `status:*` label |
-| `metadata.plan` frontmatter | Issue body Notes section |
-| `metadata.issue` frontmatter | Issue number (written back) |
-| `last-completed` frontmatter | Issue closed date |
+| Per-item file field                        | GitHub Issue field          |
+| ------------------------------------------ | --------------------------- |
+| `name` frontmatter                         | Issue title                 |
+| `metadata.priority` frontmatter (P0/P1/P2) | `priority:*` label          |
+| Item description body                      | Issue body                  |
+| `metadata.status` frontmatter              | `status:*` label            |
+| `metadata.plan` frontmatter                | Issue body Notes section    |
+| `metadata.issue` frontmatter               | Issue number (written back) |
+| `last-completed` frontmatter               | Issue closed date           |
 
 SOURCE: GitHub Issues documentation — <https://docs.github.com/en/issues/tracking-your-work-with-issues> (accessed 2026-02-21)
 SOURCE: Octokit.js REST — <https://octokit.github.io/rest.js/v20#issues-create> (accessed 2026-02-21)
