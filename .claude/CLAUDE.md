@@ -86,6 +86,45 @@ pnpm run format    # Biome format
 pnpm add -D <pkg>  # Add a dev dependency
 ```
 
+### Post-push workflow
+
+After every push, follow this sequence:
+
+1. **Watch CI until completion:**
+
+   ```bash
+   node .claude/scripts/gh-api.cjs run list --limit 1
+   ```
+
+   If `status` is not `completed`, wait and re-check. Once completed, check `conclusion` — if `failure`, investigate:
+
+   ```bash
+   # Find the failing job
+   node .claude/scripts/gh-api.cjs run logs <run-id>
+   # Get annotations for a failing check
+   node .claude/scripts/gh-api.cjs checks list <pr-number>
+   node .claude/scripts/gh-api.cjs checks annotations <check-run-id>
+   ```
+
+   Fix failures and push again. Do not leave CI red.
+
+2. **Read CodeRabbit review feedback:**
+
+   ```bash
+   node .claude/scripts/gh-api.cjs issue comment search <pr-number> \
+     --user "coderabbitai[bot]" \
+     --section "Prompt for AI Agents" \
+     --source reviews
+   ```
+
+   Each result contains a `content` field with a specific, actionable prompt. Evaluate each against the current code — CodeRabbit may reference stale line numbers after subsequent pushes. Verify the finding still applies before acting on it.
+
+3. **Check for review comments (code annotations):**
+
+   ```bash
+   node .claude/scripts/gh-api.cjs review-comment list <pr-number>
+   ```
+
 ### Adding a new detection category
 
 This is the most common type of change. Follow this pattern exactly:

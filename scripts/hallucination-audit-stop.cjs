@@ -15,9 +15,12 @@
  * - Does not attempt to infer truth; it enforces language discipline and evidence signaling.
  */
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+
+const { loadConfig, loadWeights, DEFAULT_WEIGHTS } = require('./hallucination-config.cjs');
 
 function readStdinJson() {
   try {
@@ -469,17 +472,7 @@ function splitIntoSentences(text) {
   return raw.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
-/**
- * Default weights for each detection category.
- * Must sum to 1.0 for aggregate scores to be in [0, 1].
- */
-const DEFAULT_WEIGHTS = {
-  speculation_language: 0.25,
-  causality_language: 0.3,
-  pseudo_quantification: 0.15,
-  completeness_claim: 0.2,
-  fabricated_source: 0.1,
-};
+// DEFAULT_WEIGHTS imported from ./hallucination-config.cjs
 
 /**
  * Score a single sentence across all detection categories.
@@ -541,33 +534,7 @@ function getLabelForScore(score) {
   return 'HALLUCINATED';
 }
 
-/**
- * Load weights from an optional `.hallucination-detectorrc.cjs` config file
- * in the current working directory. Only known category keys with finite
- * non-negative numeric values are accepted; all others fall back to defaults.
- */
-function loadWeights() {
-  const rcPath = path.join(process.cwd(), '.hallucination-detectorrc.cjs');
-  try {
-    if (fs.existsSync(rcPath)) {
-      // eslint-disable-next-line import/no-dynamic-require
-      const rc = require(rcPath);
-      if (rc?.weights && typeof rc.weights === 'object' && !Array.isArray(rc.weights)) {
-        const merged = { ...DEFAULT_WEIGHTS };
-        for (const category of Object.keys(DEFAULT_WEIGHTS)) {
-          const val = rc.weights[category];
-          if (Number.isFinite(val) && val >= 0) {
-            merged[category] = val;
-          }
-        }
-        return merged;
-      }
-    }
-  } catch {
-    // ignore errors loading config
-  }
-  return DEFAULT_WEIGHTS;
-}
+// loadWeights and loadConfig imported from ./hallucination-config.cjs
 
 /**
  * Score every sentence in a block of text.
@@ -586,6 +553,33 @@ function scoreText(text, weights) {
     const label = getLabelForScore(aggregateScore);
     return { sentence, index, total, scores, aggregateScore, label };
   });
+}
+
+/**
+ * Compute a short hash of text for deduplication without storing full content.
+ *
+ * @param {string} text
+ * @returns {string} First 16 hex chars of SHA-256.
+ */
+function hashText(text) {
+  return crypto.createHash('sha256').update(text).digest('hex').slice(0, 16);
+}
+
+/**
+ * Append a single introspection log entry to the JSONL log file.
+ * Fails silently — introspection logging must never crash the hook.
+ *
+ * @param {string} logPath  - Absolute path to the JSONL log file.
+ * @param {object} entry    - Log entry object.
+ * @returns {void}
+ */
+function appendIntrospectionLog(logPath, entry) {
+  try {
+    const line = `${JSON.stringify(entry)}\n`;
+    fs.appendFileSync(logPath, line, 'utf-8');
+  } catch {
+    // intentionally silent — logging failure must not affect hook behavior
+  }
 }
 
 function loadLoopState(sessionId) {
@@ -636,7 +630,50 @@ function main() {
     process.exit(0);
   }
 
+  const config = loadConfig();
   const matches = findTriggerMatches(lastAssistantText);
+
+  if (config.introspect) {
+    // Introspection mode: log everything, never block.
+    const { statePath, data } = loadLoopState(sessionId);
+    const blocks = Number(data.blocks || 0);
+    const nextBlocks = matches.length > 0 ? blocks + 1 : 0;
+    saveLoopState(statePath, { blocks: nextBlocks });
+
+    const logPath =
+      config.introspectOutputPath ||
+      path.join(os.tmpdir(), 'hallucination-detector-introspect.jsonl');
+
+    const wouldBlock = matches.length > 0 && nextBlocks <= 2;
+    const sentenceScores = scoreText(lastAssistantText, config.weights);
+
+    const categoryCounts = {
+      speculation_language: 0,
+      causality_language: 0,
+      pseudo_quantification: 0,
+      completeness_claim: 0,
+    };
+    for (const m of matches) {
+      if (Object.hasOwn(categoryCounts, m.kind)) {
+        categoryCounts[m.kind] += 1;
+      }
+    }
+
+    appendIntrospectionLog(logPath, {
+      timestamp: new Date().toISOString(),
+      sessionId,
+      wouldBlock,
+      matchCount: matches.length,
+      matches: matches.map((m) => ({ kind: m.kind, evidence: m.evidence })),
+      sentenceScores,
+      textLength: lastAssistantText.length,
+      textHash: hashText(lastAssistantText),
+      categories: categoryCounts,
+    });
+
+    process.exit(0);
+  }
+
   if (matches.length === 0) {
     const { statePath } = loadLoopState(sessionId);
     saveLoopState(statePath, { blocks: 0 });
@@ -701,7 +738,12 @@ module.exports = {
   scoreSentence,
   aggregateWeightedScore,
   getLabelForScore,
+  // Re-exported from hallucination-config.cjs for backward compatibility
   loadWeights,
+  loadConfig,
   scoreText,
   DEFAULT_WEIGHTS,
+  // New introspection exports
+  appendIntrospectionLog,
+  hashText,
 };

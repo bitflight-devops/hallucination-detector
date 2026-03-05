@@ -2,6 +2,7 @@
   "hooks": {
     "SessionStart": [
       {
+        "description": "Inject hallucination-prevention behavioral framing at session start",
         "hooks": [
           {
             "type": "command",
@@ -12,6 +13,7 @@
     ],
     "Stop": [
       {
+        "description": "Audit assistant output for speculation, ungrounded causality, pseudo-quantification, and completeness overclaims",
         "hooks": [
           {
             "type": "command",

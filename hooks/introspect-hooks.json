@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "description": "Semantic hallucination detection (prompt-based, for introspection mode)",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You are reviewing the assistant's last response for hallucination patterns. Check for these specific issues:\n\n1. SPECULATION: Unverified claims using hedging language ('probably', 'likely', 'I think', 'seems') without citing evidence from tools/files/commands.\n2. UNGROUNDED CAUSALITY: Causal claims ('because', 'caused by', 'due to') without citing specific observed evidence (error messages, file contents, command output).\n3. PSEUDO-QUANTIFICATION: Made-up percentages, scores (N/10), or metrics not derived from actual data.\n4. COMPLETENESS OVERCLAIMS: Claims like 'all fixed', 'comprehensive', 'fully resolved' without enumerating what was actually checked.\n5. FABRICATED SOURCES: References to documentation, APIs, or code that may not exist.\n\nIf you find ANY of these patterns, respond with {\"ok\": false, \"reason\": \"[category]: [specific quote from the response] — [why this is problematic]\"}.\n\nIf the response is well-grounded with evidence, respond with {\"ok\": true}.\n\nBe strict but fair. Suppress if: the phrase is in a question, inside a code block, or accompanied by specific evidence (file paths, error messages, command output) within the same sentence."
+          }
+        ]
+      }
+    ]
+  }
+}
