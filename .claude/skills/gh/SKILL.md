@@ -12,6 +12,8 @@ Provides programmatic GitHub API access for the hallucination-detector repo usin
 
 - Need to interact with GitHub API (issues, PRs, labels, milestones)
 - Creating or listing pull requests
+- Reviewing PRs: list/view/submit/dismiss reviews, code annotation comments
+- Managing CI: list/view/rerun workflow runs, check run annotations and logs
 - Managing GitHub Issues, Projects V2, or Labels
 - Running in a proxy environment where direct DNS to `api.github.com` is unavailable
 
@@ -48,6 +50,29 @@ node .claude/scripts/gh-api.cjs pr create --title "feat: add X" --base main --bo
 # Labels
 node .claude/scripts/gh-api.cjs label list
 node .claude/scripts/gh-api.cjs label create --name "priority:p0" --color "D73A4A" --description "Critical"
+
+# PR Reviews
+node .claude/scripts/gh-api.cjs review list 27
+node .claude/scripts/gh-api.cjs review view 27 --review-id 123456
+node .claude/scripts/gh-api.cjs review submit 27 --event APPROVE --body "LGTM"
+node .claude/scripts/gh-api.cjs review dismiss 27 --review-id 123456 --message "Outdated"
+
+# Code Annotation Comments (PR review comments)
+node .claude/scripts/gh-api.cjs review-comment list 27
+node .claude/scripts/gh-api.cjs review-comment view --comment-id 123456
+node .claude/scripts/gh-api.cjs review-comment reply 27 --comment-id 123456 --body "Fixed"
+
+# CI Check Runs
+node .claude/scripts/gh-api.cjs checks list --ref main
+node .claude/scripts/gh-api.cjs checks view --check-run-id 123456
+node .claude/scripts/gh-api.cjs checks annotations --check-run-id 123456
+
+# Workflow Runs
+node .claude/scripts/gh-api.cjs run list
+node .claude/scripts/gh-api.cjs run view --run-id 123456
+node .claude/scripts/gh-api.cjs run rerun --run-id 123456
+node .claude/scripts/gh-api.cjs run logs --run-id 123456
+node .claude/scripts/gh-api.cjs run cancel --run-id 123456
 ```
 
 All output is JSON to stdout. Errors go to stderr with exit code 1.
