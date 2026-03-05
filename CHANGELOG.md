@@ -1,3 +1,9 @@
+## [1.6.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.5.0...v1.6.0) (2026-03-05)
+
+### Features
+
+- add feature request issue template with feature flag enforcement ([75dbc26](https://github.com/bitflight-devops/hallucination-detector/commit/75dbc267b5f7eeeba31bb8e140de24c9390355bf))
+
 ## [1.5.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.4.0...v1.5.0) (2026-03-05)
 
 ### Features
