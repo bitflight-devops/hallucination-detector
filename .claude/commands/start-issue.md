@@ -24,46 +24,59 @@ If no acceptance criteria exist in the body, state that and ask the user whether
 ## Step 2: Load deep analysis and comments
 
 ```bash
-node .claude/scripts/gh-api.cjs issue comment list $ARGUMENTS
+node .claude/scripts/gh-api.cjs issue comment search $ARGUMENTS \
+  --section "Deep Analysis: Implementation Impact"
 ```
 
-Look for a "Deep Analysis: Implementation Impact" comment. Extract:
+If found, extract:
 - Dependencies (blocked by / blocks)
 - Files touched
 - Failure modes
 - Contract impact
 
-If a blocking dependency is open, warn the user before proceeding.
+If no deep analysis comment exists, proceed using the issue body alone. If a blocking dependency is listed and still open, warn the user before proceeding.
 
-## Step 3: Create a feature branch
+## Step 3: Determine workflow weight
+
+Based on the labels extracted in Step 1:
+
+- **Lightweight** (phase 1 + risk low + impact additive): Skip the research substep in Step 5. Go straight from understanding to objectives.
+- **Standard** (everything else): Follow all substeps in Step 5.
+
+## Step 4: Create a feature branch
 
 Derive a branch name from the issue number and title:
 - Format: `feat/<issue-number>-<kebab-case-slug>` (max 50 chars for the slug)
-- Example: issue #15 "Cognitive bias detection" -> `feat/15-cognitive-bias-detection`
+- Example: issue #15 "Cognitive bias detection" → `feat/15-cognitive-bias-detection`
+
+Check if the branch exists first:
+
+```bash
+git branch --list "feat/$ARGUMENTS-*"
+```
+
+If it exists, check it out. Otherwise create it:
 
 ```bash
 git checkout -b <branch-name>
 ```
 
-## Step 4: Plan the work
+## Step 5: Plan the work
 
-Using the issue body, deep analysis, and acceptance criteria, follow the Working Process from `.claude/CLAUDE.md`:
+Follow the Working Process defined in `.claude/CLAUDE.md` § "Working Process" (steps 1–4: understand, research, objectives, gap analysis). If this is a **lightweight** issue (Step 3), skip the research substep.
 
-1. **Understand** — Read every file mentioned in "Files touched". Understand the current code.
-2. **Research** — Search for how the problem is solved elsewhere (3+ examples).
-3. **Objectives** — List specific, testable acceptance criteria.
-4. **Gap analysis** — Compare research against objectives. Identify gaps.
+Read every file listed in the deep analysis "Files touched" section. If no deep analysis exists, identify the relevant files from the issue body and the "Adding a new detection category" section of `.claude/CLAUDE.md`.
 
 Present the plan to the user as a todo list before starting implementation.
 
-## Step 5: Implement
+## Step 6: Implement
 
 Delegate JavaScript implementation to the `javascript-pro` agent per project rules. Provide:
 - The spec (what to change, interfaces, consistency rules)
 - Files to create or modify
 - Shared modules to use or create
 
-## Step 6: Verify
+## Step 7: Verify
 
 Run verification:
 
@@ -74,7 +87,7 @@ pnpm run lint
 
 Confirm each acceptance criterion from the issue is met with evidence (test output, grep results, file reads). Do not assert completion without proof.
 
-## Step 7: Commit and push
+## Step 8: Commit and push
 
 Stage and commit with a conventional commit message referencing the issue:
 
@@ -90,7 +103,7 @@ Push to the feature branch:
 git push -u origin <branch-name>
 ```
 
-## Step 8: Create a PR
+## Step 9: Create a PR
 
 ```bash
 node .claude/scripts/create-pr.cjs --title "<type>: <description>" --body "Closes #$ARGUMENTS
@@ -104,7 +117,7 @@ node .claude/scripts/create-pr.cjs --title "<type>: <description>" --body "Close
 - [ ] <acceptance criteria from issue>"
 ```
 
-## Step 9: Post-push workflow
+## Step 10: Post-push workflow
 
 Follow the post-push workflow from `.claude/CLAUDE.md`:
 1. Watch CI until completion
