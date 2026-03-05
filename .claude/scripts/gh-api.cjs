@@ -157,6 +157,204 @@ async function issueComment(octokit, numberStr) {
 }
 
 /**
+ * Escape special regex characters in a string.
+ * @param {string} str
+ * @returns {string}
+ */
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * List all comments on an issue or PR.
+ * @param {import('octokit').Octokit} octokit
+ * @param {string} numberStr - Issue/PR number as a string from argv.
+ */
+async function issueCommentList(octokit, numberStr) {
+  const issue_number = parseIntArg(numberStr, 'issue number');
+  const userFilter = getArg('--user');
+
+  const all = await octokit.paginate(octokit.rest.issues.listComments, {
+    owner: OWNER,
+    repo: REPO,
+    issue_number,
+    per_page: 100,
+  });
+
+  const comments = userFilter ? all.filter((c) => c.user?.login === userFilter) : all;
+
+  const result = comments.map((c) => ({
+    id: c.id,
+    user: c.user?.login ?? null,
+    created_at: c.created_at,
+    updated_at: c.updated_at,
+    body: c.body && c.body.length > 200 ? `${c.body.slice(0, 200)}…` : c.body,
+  }));
+
+  console.log(JSON.stringify(result, null, 2));
+}
+
+/**
+ * View a single issue comment by its ID (full body, no truncation).
+ * @param {import('octokit').Octokit} octokit
+ * @param {string} commentStr - Comment ID as a string from argv.
+ */
+async function issueCommentView(octokit, commentStr) {
+  const comment_id = parseIntArg(commentStr, 'comment ID');
+
+  const { data } = await octokit.rest.issues.getComment({
+    owner: OWNER,
+    repo: REPO,
+    comment_id,
+  });
+
+  console.log(
+    JSON.stringify(
+      {
+        id: data.id,
+        user: data.user?.login ?? null,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+        html_url: data.html_url,
+        body: data.body,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+/**
+ * Extract a named section from a body string, trying three patterns in order:
+ * ATX headings, bold text, and HTML <details><summary> blocks.
+ *
+ * Returns the trimmed section content, or null if no pattern matches.
+ *
+ * @param {string} body - The comment or review body text.
+ * @param {string} sectionHeading - The section heading to search for.
+ * @returns {string | null}
+ */
+function extractSection(body, sectionHeading) {
+  const escaped = escapeRegExp(sectionHeading);
+
+  // Pattern 1: ATX heading (## Heading)
+  const atxPattern = new RegExp(
+    `^#{1,6}\\s*${escaped}[^\\n]*\\n([\\s\\S]*?)(?=^#{1,6}\\s|$)`,
+    'mi',
+  );
+  let match = body.match(atxPattern);
+  if (match) return match[1].trim();
+
+  // Pattern 2: Bold text (**Heading**)
+  const boldPattern = new RegExp(
+    `\\*\\*${escaped}[^*]*\\*\\*[:\\s]*\\n?([\\s\\S]*?)(?=\\*\\*[A-Z]|^#{1,6}\\s|$)`,
+    'mi',
+  );
+  match = body.match(boldPattern);
+  if (match) return match[1].trim();
+
+  // Pattern 3: HTML <details><summary> block — emoji/whitespace allowed before heading text
+  const detailsPattern = new RegExp(
+    `<details>\\s*<summary>[^<]*?${escaped}[^<]*?</summary>\\s*([\\s\\S]*?)\\s*</details>`,
+    'mi',
+  );
+  match = body.match(detailsPattern);
+  if (match) {
+    // Strip markdown code fences that CodeRabbit wraps content in
+    let content = match[1].trim();
+    content = content
+      .replace(/^```[^\n]*\n?/gm, '')
+      .replace(/\n?```$/gm, '')
+      .trim();
+    return content;
+  }
+
+  return null;
+}
+
+/**
+ * Search for a specific markdown section within issue/PR comments or PR review
+ * bodies by a specific user.
+ *
+ * Flags:
+ *   --user <login>       Required. Filter by GitHub login.
+ *   --section <heading>  Required. Section heading to extract.
+ *   --source <source>    Optional. "comments" (default) or "reviews".
+ *
+ * @param {import('octokit').Octokit} octokit
+ * @param {string} numberStr - Issue/PR number as a string from argv.
+ */
+async function issueCommentSearch(octokit, numberStr) {
+  const issue_number = parseIntArg(numberStr, 'issue/PR number');
+  const userFilter = getArg('--user');
+  const sectionHeading = getArg('--section');
+  const source = getArg('--source') ?? 'comments';
+
+  if (!userFilter) {
+    console.error('ERROR: --user is required for issue comment search');
+    process.exit(1);
+  }
+  if (!sectionHeading) {
+    console.error('ERROR: --section is required for issue comment search');
+    process.exit(1);
+  }
+  if (source !== 'comments' && source !== 'reviews') {
+    console.error("ERROR: --source must be 'comments' or 'reviews'");
+    process.exit(1);
+  }
+
+  const results = [];
+
+  if (source === 'reviews') {
+    const all = await octokit.paginate(octokit.rest.pulls.listReviews, {
+      owner: OWNER,
+      repo: REPO,
+      pull_number: issue_number,
+      per_page: 100,
+    });
+
+    const userReviews = all.filter((r) => r.user?.login === userFilter);
+
+    for (const r of userReviews) {
+      const content = extractSection(r.body ?? '', sectionHeading);
+      if (content !== null) {
+        results.push({
+          review_id: r.id,
+          user: r.user?.login ?? null,
+          submitted_at: r.submitted_at,
+          section: sectionHeading,
+          content,
+        });
+      }
+    }
+  } else {
+    const all = await octokit.paginate(octokit.rest.issues.listComments, {
+      owner: OWNER,
+      repo: REPO,
+      issue_number,
+      per_page: 100,
+    });
+
+    const userComments = all.filter((c) => c.user?.login === userFilter);
+
+    for (const c of userComments) {
+      const content = extractSection(c.body ?? '', sectionHeading);
+      if (content !== null) {
+        results.push({
+          comment_id: c.id,
+          user: c.user?.login ?? null,
+          created_at: c.created_at,
+          section: sectionHeading,
+          content,
+        });
+      }
+    }
+  }
+
+  console.log(JSON.stringify(results, null, 2));
+}
+
+/**
  * List open pull requests.
  * @param {import('octokit').Octokit} octokit
  */
@@ -791,6 +989,9 @@ async function main() {
         '  issue create --title "..." [--label "..."] [--body "..."]\n' +
         '  issue view <number>\n' +
         '  issue comment <number> --body "..."\n' +
+        '  issue comment list <number> [--user <login>]\n' +
+        '  issue comment view <comment-id>\n' +
+        '  issue comment search <number> --user <login> --section <heading> [--source comments|reviews]\n' +
         '  pr list\n' +
         '  pr create --title "..." [--base main] [--body "..."]\n' +
         '  label list\n' +
@@ -829,12 +1030,33 @@ async function main() {
       }
       await issueView(octokit, numberStr);
     } else if (action === 'comment') {
-      const [numberStr] = rest;
-      if (!numberStr) {
-        console.error('ERROR: issue comment requires an issue number');
+      const [subActionOrNumber, subArg] = rest;
+      if (!subActionOrNumber) {
+        console.error('ERROR: issue comment requires a subcommand or issue number');
         process.exit(1);
       }
-      await issueComment(octokit, numberStr);
+      if (subActionOrNumber === 'list') {
+        if (!subArg) {
+          console.error('ERROR: issue comment list requires an issue number');
+          process.exit(1);
+        }
+        await issueCommentList(octokit, subArg);
+      } else if (subActionOrNumber === 'view') {
+        if (!subArg) {
+          console.error('ERROR: issue comment view requires a comment ID');
+          process.exit(1);
+        }
+        await issueCommentView(octokit, subArg);
+      } else if (subActionOrNumber === 'search') {
+        if (!subArg) {
+          console.error('ERROR: issue comment search requires an issue number');
+          process.exit(1);
+        }
+        await issueCommentSearch(octokit, subArg);
+      } else {
+        // Legacy: issue comment <number> --body "..."
+        await issueComment(octokit, subActionOrNumber);
+      }
     } else {
       console.error(`ERROR: unknown issue action '${action}'`);
       process.exit(1);

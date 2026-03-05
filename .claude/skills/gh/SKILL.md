@@ -43,6 +43,9 @@ node .claude/scripts/gh-api.cjs issue list
 node .claude/scripts/gh-api.cjs issue create --title "feat: add X" --label "type:feature" --label "priority:p1"
 node .claude/scripts/gh-api.cjs issue view 42
 node .claude/scripts/gh-api.cjs issue comment 42 --body "Implemented in PR #45."
+node .claude/scripts/gh-api.cjs issue comment list 27 [--user "coderabbitai[bot]"]
+node .claude/scripts/gh-api.cjs issue comment view 123456
+node .claude/scripts/gh-api.cjs issue comment search 27 --user "coderabbitai[bot]" --section "Prompt for AI Agents" --source reviews
 
 # Pull Requests
 node .claude/scripts/gh-api.cjs pr list
