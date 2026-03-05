@@ -1,0 +1,113 @@
+# Start Work on Issue
+
+You are beginning work on GitHub issue **$ARGUMENTS**.
+
+Follow these steps in order. Do not skip steps. Do not jump to implementation.
+
+---
+
+## Step 1: Load the issue
+
+```bash
+node .claude/scripts/gh-api.cjs issue view $ARGUMENTS
+```
+
+Read the full issue body, labels, milestone, and assignee. Extract:
+- **Title** and **summary**
+- **Impact type** label (e.g. `impact: additive`)
+- **Risk level** label (e.g. `risk: low`)
+- **Phase** label (e.g. `phase: 1-additive-patterns`)
+- **Acceptance criteria** from the issue body
+
+If no acceptance criteria exist in the body, state that and ask the user whether to proceed or define criteria first.
+
+## Step 2: Load deep analysis and comments
+
+```bash
+node .claude/scripts/gh-api.cjs issue comment list $ARGUMENTS
+```
+
+Look for a "Deep Analysis: Implementation Impact" comment. Extract:
+- Dependencies (blocked by / blocks)
+- Files touched
+- Failure modes
+- Contract impact
+
+If a blocking dependency is open, warn the user before proceeding.
+
+## Step 3: Create a feature branch
+
+Derive a branch name from the issue number and title:
+- Format: `feat/<issue-number>-<kebab-case-slug>` (max 50 chars for the slug)
+- Example: issue #15 "Cognitive bias detection" -> `feat/15-cognitive-bias-detection`
+
+```bash
+git checkout -b <branch-name>
+```
+
+## Step 4: Plan the work
+
+Using the issue body, deep analysis, and acceptance criteria, follow the Working Process from `.claude/CLAUDE.md`:
+
+1. **Understand** — Read every file mentioned in "Files touched". Understand the current code.
+2. **Research** — Search for how the problem is solved elsewhere (3+ examples).
+3. **Objectives** — List specific, testable acceptance criteria.
+4. **Gap analysis** — Compare research against objectives. Identify gaps.
+
+Present the plan to the user as a todo list before starting implementation.
+
+## Step 5: Implement
+
+Delegate JavaScript implementation to the `javascript-pro` agent per project rules. Provide:
+- The spec (what to change, interfaces, consistency rules)
+- Files to create or modify
+- Shared modules to use or create
+
+## Step 6: Verify
+
+Run verification:
+
+```bash
+pnpm test
+pnpm run lint
+```
+
+Confirm each acceptance criterion from the issue is met with evidence (test output, grep results, file reads). Do not assert completion without proof.
+
+## Step 7: Commit and push
+
+Stage and commit with a conventional commit message referencing the issue:
+
+```
+feat: <description> (#$ARGUMENTS)
+```
+
+or `fix:`, `chore:`, etc. as appropriate for the change type.
+
+Push to the feature branch:
+
+```bash
+git push -u origin <branch-name>
+```
+
+## Step 8: Create a PR
+
+```bash
+node .claude/scripts/create-pr.cjs --title "<type>: <description>" --body "Closes #$ARGUMENTS
+
+## Summary
+<what changed and why>
+
+## Test plan
+- [ ] pnpm test passes
+- [ ] pnpm run lint passes
+- [ ] <acceptance criteria from issue>"
+```
+
+## Step 9: Post-push workflow
+
+Follow the post-push workflow from `.claude/CLAUDE.md`:
+1. Watch CI until completion
+2. Read CodeRabbit review feedback
+3. Check for review comments
+4. Fix any issues and push again
