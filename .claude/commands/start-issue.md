@@ -13,6 +13,7 @@ node .claude/scripts/gh-api.cjs issue view $ARGUMENTS
 ```
 
 Read the full issue body, labels, milestone, and assignee. Extract:
+
 - **Title** and **summary**
 - **Impact type** label (e.g. `impact: additive`)
 - **Risk level** label (e.g. `risk: low`)
@@ -29,6 +30,7 @@ node .claude/scripts/gh-api.cjs issue comment search $ARGUMENTS \
 ```
 
 If found, extract:
+
 - Dependencies (blocked by / blocks)
 - Files touched
 - Failure modes
@@ -46,6 +48,7 @@ Based on the labels extracted in Step 1:
 ## Step 4: Create a feature branch
 
 Derive a branch name from the issue number and title:
+
 - Format: `feat/<issue-number>-<kebab-case-slug>` (max 50 chars for the slug)
 - Example: issue #15 "Cognitive bias detection" → `feat/15-cognitive-bias-detection`
 
@@ -72,6 +75,7 @@ Present the plan to the user as a todo list before starting implementation.
 ## Step 6: Implement
 
 Delegate JavaScript implementation to the `javascript-pro` agent per project rules. Provide:
+
 - The spec (what to change, interfaces, consistency rules)
 - Files to create or modify
 - Shared modules to use or create
@@ -120,6 +124,7 @@ node .claude/scripts/create-pr.cjs --title "<type>: <description>" --body "Close
 ## Step 10: Post-push workflow
 
 Follow the post-push workflow from `.claude/CLAUDE.md`:
+
 1. Watch CI until completion
 2. Read CodeRabbit review feedback
 3. Check for review comments
