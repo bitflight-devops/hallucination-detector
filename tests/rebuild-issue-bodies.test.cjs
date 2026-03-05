@@ -1,10 +1,7 @@
-const { describe, it, mock } = require('node:test');
+const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
-
-// Mock the module to test internal functions without making API calls
-const modulePath = '../.claude/scripts/rebuild-issue-bodies.cjs';
 
 // We'll test the utility functions that can be tested without external dependencies
 // For functions that require Octokit, we'd need to mock the API calls
