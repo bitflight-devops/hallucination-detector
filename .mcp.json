@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "octocode": {
+      "command": "npx",
+      "args": ["-y", "octocode-mcp@latest"]
+    }
+  }
+}
