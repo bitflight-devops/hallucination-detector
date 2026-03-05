@@ -77,6 +77,7 @@ describe('loadConfig', () => {
   it('config is frozen', () => {
     const config = loadConfig();
     assert.ok(Object.isFrozen(config));
+    assert.ok(Object.isFrozen(config.weights));
   });
 
   it('returns introspect: false by default', () => {

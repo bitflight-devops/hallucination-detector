@@ -72,7 +72,7 @@ function loadConfig() {
   const introspectOutputPath =
     typeof rc?.introspectOutputPath === 'string' ? rc.introspectOutputPath : null;
 
-  return Object.freeze({ weights, introspect, introspectOutputPath });
+  return Object.freeze({ weights: Object.freeze(weights), introspect, introspectOutputPath });
 }
 
 /**
