@@ -1,6 +1,10 @@
 ---
 name: gh
 description: "GitHub API access and project management automation for the hallucination-detector repo. Uses octokit with proxy-aware client for all GitHub operations — issues, PRs, labels, milestones, Projects V2. No gh CLI required."
+compatibility: "Requires Node.js 18+, octokit devDependency, and GITHUB_TOKEN env var. Designed for Claude Code."
+metadata:
+  author: bitflight-devops
+  version: "1.0"
 ---
 
 # GitHub API — Setup and Usage

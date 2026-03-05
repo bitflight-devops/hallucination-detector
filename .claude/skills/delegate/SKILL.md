@@ -2,6 +2,10 @@
 name: delegate
 description: Quick delegation template for sub-agent prompts. Use when assigning work to a sub-agent, before invoking the Task tool, or when preparing prompts for specialized agents. Provides the WHERE-WHAT-WHY framework. For comprehensive delegation guidance, activate the agent-orchestration how-to-delegate skill.
 user-invocable: true
+compatibility: "Designed for Claude Code (or similar multi-agent products)."
+metadata:
+  author: bitflight-devops
+  version: "1.0"
 ---
 
 # Delegation Template
