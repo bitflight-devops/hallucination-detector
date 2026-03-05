@@ -189,6 +189,16 @@ async function issueCommentList(octokit, numberStr) {
     created_at: c.created_at,
     updated_at: c.updated_at,
     body: c.body && c.body.length > 200 ? `${c.body.slice(0, 200)}…` : c.body,
+    reactions: {
+      '+1': c.reactions?.['+1'] ?? 0,
+      '-1': c.reactions?.['-1'] ?? 0,
+      laugh: c.reactions?.laugh ?? 0,
+      confused: c.reactions?.confused ?? 0,
+      heart: c.reactions?.heart ?? 0,
+      hooray: c.reactions?.hooray ?? 0,
+      rocket: c.reactions?.rocket ?? 0,
+      eyes: c.reactions?.eyes ?? 0,
+    },
   }));
 
   console.log(JSON.stringify(result, null, 2));
@@ -217,6 +227,87 @@ async function issueCommentView(octokit, commentStr) {
         updated_at: data.updated_at,
         html_url: data.html_url,
         body: data.body,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+// Valid GitHub reaction content values (API-supported set).
+const VALID_REACTIONS = ['+1', '-1', 'laugh', 'confused', 'heart', 'hooray', 'rocket', 'eyes'];
+
+/**
+ * Add a reaction to an issue comment.
+ * @param {import('octokit').Octokit} octokit
+ * @param {string} commentStr - Comment ID as a string from argv.
+ */
+async function issueCommentReact(octokit, commentStr) {
+  const comment_id = parseIntArg(commentStr, 'comment ID');
+  const content = requireArg(
+    getArg,
+    '--reaction',
+    '--reaction is required for issue comment react',
+  );
+
+  if (!VALID_REACTIONS.includes(content)) {
+    console.error(`ERROR: --reaction must be one of: ${VALID_REACTIONS.join(', ')}`);
+    process.exit(1);
+  }
+
+  const { data } = await octokit.rest.reactions.createForIssueComment({
+    owner: OWNER,
+    repo: REPO,
+    comment_id,
+    content,
+  });
+
+  console.log(
+    JSON.stringify(
+      {
+        id: data.id,
+        content: data.content,
+        user: data.user?.login ?? null,
+        created_at: data.created_at,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+/**
+ * Add a reaction to a pull request review comment.
+ * @param {import('octokit').Octokit} octokit
+ * @param {string} commentStr - Comment ID as a string from argv.
+ */
+async function reviewCommentReact(octokit, commentStr) {
+  const comment_id = parseIntArg(commentStr, 'comment ID');
+  const content = requireArg(
+    getArg,
+    '--reaction',
+    '--reaction is required for review-comment react',
+  );
+
+  if (!VALID_REACTIONS.includes(content)) {
+    console.error(`ERROR: --reaction must be one of: ${VALID_REACTIONS.join(', ')}`);
+    process.exit(1);
+  }
+
+  const { data } = await octokit.rest.reactions.createForPullRequestReviewComment({
+    owner: OWNER,
+    repo: REPO,
+    comment_id,
+    content,
+  });
+
+  console.log(
+    JSON.stringify(
+      {
+        id: data.id,
+        content: data.content,
+        user: data.user?.login ?? null,
+        created_at: data.created_at,
       },
       null,
       2,
@@ -306,6 +397,8 @@ async function issueCommentSearch(octokit, numberStr) {
   const results = [];
 
   if (source === 'reviews') {
+    // NOTE: The pulls.listReviews endpoint does not return reaction counts.
+    // Reactions are not included in review results.
     const all = await octokit.paginate(octokit.rest.pulls.listReviews, {
       owner: OWNER,
       repo: REPO,
@@ -346,6 +439,16 @@ async function issueCommentSearch(octokit, numberStr) {
           created_at: c.created_at,
           section: sectionHeading,
           content,
+          reactions: {
+            '+1': c.reactions?.['+1'] ?? 0,
+            '-1': c.reactions?.['-1'] ?? 0,
+            laugh: c.reactions?.laugh ?? 0,
+            confused: c.reactions?.confused ?? 0,
+            heart: c.reactions?.heart ?? 0,
+            hooray: c.reactions?.hooray ?? 0,
+            rocket: c.reactions?.rocket ?? 0,
+            eyes: c.reactions?.eyes ?? 0,
+          },
         });
       }
     }
@@ -992,6 +1095,7 @@ async function main() {
         '  issue comment list <number> [--user <login>]\n' +
         '  issue comment view <comment-id>\n' +
         '  issue comment search <number> --user <login> --section <heading> [--source comments|reviews]\n' +
+        '  issue comment react <comment-id> --reaction <+1|-1|laugh|confused|heart|hooray|rocket|eyes>\n' +
         '  pr list\n' +
         '  pr create --title "..." [--base main] [--body "..."]\n' +
         '  label list\n' +
@@ -1003,6 +1107,7 @@ async function main() {
         '  review-comment list <pr-number>\n' +
         '  review-comment view <comment-id>\n' +
         '  review-comment reply <pr-number> <comment-id> --body "..."\n' +
+        '  review-comment react <comment-id> --reaction <+1|-1|laugh|confused|heart|hooray|rocket|eyes>\n' +
         '  checks list <pr-number-or-ref>\n' +
         '  checks view <check-run-id>\n' +
         '  checks annotations <check-run-id>\n' +
@@ -1053,6 +1158,12 @@ async function main() {
           process.exit(1);
         }
         await issueCommentSearch(octokit, subArg);
+      } else if (subActionOrNumber === 'react') {
+        if (!subArg) {
+          console.error('ERROR: issue comment react requires a comment ID');
+          process.exit(1);
+        }
+        await issueCommentReact(octokit, subArg);
       } else {
         // Legacy: issue comment <number> --body "..."
         await issueComment(octokit, subActionOrNumber);
@@ -1134,6 +1245,13 @@ async function main() {
         process.exit(1);
       }
       await reviewCommentReply(octokit, prStr, commentStr);
+    } else if (action === 'react') {
+      const [commentStr] = rest;
+      if (!commentStr) {
+        console.error('ERROR: review-comment react requires a comment ID');
+        process.exit(1);
+      }
+      await reviewCommentReact(octokit, commentStr);
     } else {
       console.error(`ERROR: unknown review-comment action '${action}'`);
       process.exit(1);
