@@ -1,3 +1,22 @@
+## [1.5.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.4.0...v1.5.0) (2026-03-05)
+
+### Features
+
+- add /start-issue slash command for issue-driven development ([f3f09a3](https://github.com/bitflight-devops/hallucination-detector/commit/f3f09a380836ddf1a9812c820630abf943a59e4d))
+- add comment list/view/search commands and CodeRabbit rule ([62b204f](https://github.com/bitflight-devops/hallucination-detector/commit/62b204f13ae11862a47c650772bbfd411cdf4e65))
+- add gh skill with octokit-based GitHub project management ([74fa559](https://github.com/bitflight-devops/hallucination-detector/commit/74fa5594ecf1bef738a11b6901b7f66dbe8de0d3))
+- add introspection mode for data-driven heuristic refinement ([04477fe](https://github.com/bitflight-devops/hallucination-detector/commit/04477fe8ab3122a4c6b85c51037c0699ab003c48))
+- add PR review, code comments, and CI pipeline commands to gh-api.cjs ([938da4b](https://github.com/bitflight-devops/hallucination-detector/commit/938da4b8ad7a4c88a412412b9b2375fbb529e7f9))
+- add proxy-aware GitHub API tooling for issue/PR management ([84f7a0c](https://github.com/bitflight-devops/hallucination-detector/commit/84f7a0ccacd565b4f9b03ade1913ebe97c18fc30))
+- add reaction support to gh-api.cjs for read-receipt tracking ([669feb7](https://github.com/bitflight-devops/hallucination-detector/commit/669feb79fafabd3e583b685393ca2ed69f0ffa7d))
+
+### Bug Fixes
+
+- add per_page to paginate calls, eliminate extra API call in checksList ([78f6ae2](https://github.com/bitflight-devops/hallucination-detector/commit/78f6ae231b7aa4fff34decb6f3a62d7d7a4ed6f6))
+- address CodeRabbit review findings in tests and config ([031c114](https://github.com/bitflight-devops/hallucination-detector/commit/031c114297151527081a89820046cfdb45017d68))
+- resolve all Biome warnings and errors across project ([7fc7fc2](https://github.com/bitflight-devops/hallucination-detector/commit/7fc7fc2633220bbf618822c7fe90bebd2bbb15a0))
+- resolve Prettier/Biome formatter conflict on JS files ([dedd449](https://github.com/bitflight-devops/hallucination-detector/commit/dedd4493f931ad0543a08f1b4026fb02750a8391))
+
 ## [1.4.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.3.2...v1.4.0) (2026-03-01)
 
 ### Features
