@@ -24,37 +24,13 @@
  */
 
 const { createGitHubClient, OWNER, REPO } = require('./lib/github-client.cjs');
+const { createArgParser, parseIntArg, requireArg } = require('./lib/cli-args.cjs');
 
 // ---------------------------------------------------------------------------
 // Arg parsing
 // ---------------------------------------------------------------------------
 
-const args = process.argv.slice(2);
-
-/**
- * Return the value of a named CLI argument, or null if not present.
- * @param {string} name - Argument name including leading dashes, e.g. '--title'
- * @returns {string|null}
- */
-function getArg(name) {
-  const idx = args.indexOf(name);
-  return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : null;
-}
-
-/**
- * Collect all values for a repeatable argument (e.g. --label can appear multiple times).
- * @param {string} name - Argument name including leading dashes.
- * @returns {string[]}
- */
-function getArgAll(name) {
-  const values = [];
-  for (let i = 0; i < args.length - 1; i++) {
-    if (args[i] === name) {
-      values.push(args[i + 1]);
-    }
-  }
-  return values;
-}
+const { getArg, getArgAll, args } = createArgParser(process.argv.slice(2));
 
 // ---------------------------------------------------------------------------
 // Subcommand handlers
@@ -91,11 +67,7 @@ async function issueList(octokit) {
  * @param {import('octokit').Octokit} octokit
  */
 async function issueCreate(octokit) {
-  const title = getArg('--title');
-  if (!title) {
-    console.error('ERROR: --title is required for issue create');
-    process.exit(1);
-  }
+  const title = requireArg(getArg, '--title', '--title is required for issue create');
 
   const body = getArg('--body') ?? undefined;
   const labels = getArgAll('--label');
@@ -128,11 +100,7 @@ async function issueCreate(octokit) {
  * @param {string} numberStr - Issue number as a string from argv.
  */
 async function issueView(octokit, numberStr) {
-  const issueNumber = Number.parseInt(numberStr, 10);
-  if (Number.isNaN(issueNumber)) {
-    console.error(`ERROR: invalid issue number '${numberStr}'`);
-    process.exit(1);
-  }
+  const issueNumber = parseIntArg(numberStr, 'issue number');
 
   const { data } = await octokit.rest.issues.get({
     owner: OWNER,
@@ -164,17 +132,9 @@ async function issueView(octokit, numberStr) {
  * @param {string} numberStr - Issue number as a string from argv.
  */
 async function issueComment(octokit, numberStr) {
-  const issueNumber = Number.parseInt(numberStr, 10);
-  if (Number.isNaN(issueNumber)) {
-    console.error(`ERROR: invalid issue number '${numberStr}'`);
-    process.exit(1);
-  }
+  const issueNumber = parseIntArg(numberStr, 'issue number');
 
-  const body = getArg('--body');
-  if (!body) {
-    console.error('ERROR: --body is required for issue comment');
-    process.exit(1);
-  }
+  const body = requireArg(getArg, '--body', '--body is required for issue comment');
 
   const { data } = await octokit.rest.issues.createComment({
     owner: OWNER,
@@ -229,11 +189,7 @@ async function prList(octokit) {
 async function prCreate(octokit) {
   const { execSync } = require('node:child_process');
 
-  const title = getArg('--title');
-  if (!title) {
-    console.error('ERROR: --title is required for pr create');
-    process.exit(1);
-  }
+  const title = requireArg(getArg, '--title', '--title is required for pr create');
 
   const base = getArg('--base') ?? 'main';
   const body = getArg('--body') ?? '';
@@ -294,17 +250,12 @@ async function labelList(octokit) {
  * @param {import('octokit').Octokit} octokit
  */
 async function labelCreate(octokit) {
-  const name = getArg('--name');
-  const color = getArg('--color');
-
-  if (!name) {
-    console.error('ERROR: --name is required for label create');
-    process.exit(1);
-  }
-  if (!color) {
-    console.error('ERROR: --color is required for label create (hex without #, e.g. ff0000)');
-    process.exit(1);
-  }
+  const name = requireArg(getArg, '--name', '--name is required for label create');
+  const color = requireArg(
+    getArg,
+    '--color',
+    '--color is required for label create (hex without #, e.g. ff0000)',
+  );
 
   const description = getArg('--description') ?? undefined;
 
@@ -339,11 +290,7 @@ async function labelCreate(octokit) {
  * @param {string} prStr - PR number as a string from argv.
  */
 async function reviewList(octokit, prStr) {
-  const pull_number = Number.parseInt(prStr, 10);
-  if (Number.isNaN(pull_number)) {
-    console.error(`ERROR: invalid PR number '${prStr}'`);
-    process.exit(1);
-  }
+  const pull_number = parseIntArg(prStr, 'PR number');
 
   const all = await octokit.paginate(octokit.rest.pulls.listReviews, {
     owner: OWNER,
@@ -370,17 +317,8 @@ async function reviewList(octokit, prStr) {
  * @param {string} reviewStr - Review ID as a string from argv.
  */
 async function reviewView(octokit, prStr, reviewStr) {
-  const pull_number = Number.parseInt(prStr, 10);
-  if (Number.isNaN(pull_number)) {
-    console.error(`ERROR: invalid PR number '${prStr}'`);
-    process.exit(1);
-  }
-
-  const review_id = Number.parseInt(reviewStr, 10);
-  if (Number.isNaN(review_id)) {
-    console.error(`ERROR: invalid review ID '${reviewStr}'`);
-    process.exit(1);
-  }
+  const pull_number = parseIntArg(prStr, 'PR number');
+  const review_id = parseIntArg(reviewStr, 'review ID');
 
   const { data } = await octokit.rest.pulls.getReview({
     owner: OWNER,
@@ -412,17 +350,13 @@ async function reviewView(octokit, prStr, reviewStr) {
  * @param {string} prStr - PR number as a string from argv.
  */
 async function reviewSubmit(octokit, prStr) {
-  const pull_number = Number.parseInt(prStr, 10);
-  if (Number.isNaN(pull_number)) {
-    console.error(`ERROR: invalid PR number '${prStr}'`);
-    process.exit(1);
-  }
+  const pull_number = parseIntArg(prStr, 'PR number');
 
-  const event = getArg('--event');
-  if (!event) {
-    console.error('ERROR: --event is required for review submit (APPROVE|REQUEST_CHANGES|COMMENT)');
-    process.exit(1);
-  }
+  const event = requireArg(
+    getArg,
+    '--event',
+    '--event is required for review submit (APPROVE|REQUEST_CHANGES|COMMENT)',
+  );
 
   const validEvents = ['APPROVE', 'REQUEST_CHANGES', 'COMMENT'];
   if (!validEvents.includes(event)) {
@@ -462,23 +396,10 @@ async function reviewSubmit(octokit, prStr) {
  * @param {string} reviewStr - Review ID as a string from argv.
  */
 async function reviewDismiss(octokit, prStr, reviewStr) {
-  const pull_number = Number.parseInt(prStr, 10);
-  if (Number.isNaN(pull_number)) {
-    console.error(`ERROR: invalid PR number '${prStr}'`);
-    process.exit(1);
-  }
+  const pull_number = parseIntArg(prStr, 'PR number');
+  const review_id = parseIntArg(reviewStr, 'review ID');
 
-  const review_id = Number.parseInt(reviewStr, 10);
-  if (Number.isNaN(review_id)) {
-    console.error(`ERROR: invalid review ID '${reviewStr}'`);
-    process.exit(1);
-  }
-
-  const message = getArg('--message');
-  if (!message) {
-    console.error('ERROR: --message is required for review dismiss');
-    process.exit(1);
-  }
+  const message = requireArg(getArg, '--message', '--message is required for review dismiss');
 
   const { data } = await octokit.rest.pulls.dismissReview({
     owner: OWNER,
@@ -512,11 +433,7 @@ async function reviewDismiss(octokit, prStr, reviewStr) {
  * @param {string} prStr - PR number as a string from argv.
  */
 async function reviewCommentList(octokit, prStr) {
-  const pull_number = Number.parseInt(prStr, 10);
-  if (Number.isNaN(pull_number)) {
-    console.error(`ERROR: invalid PR number '${prStr}'`);
-    process.exit(1);
-  }
+  const pull_number = parseIntArg(prStr, 'PR number');
 
   const all = await octokit.paginate(octokit.rest.pulls.listReviewComments, {
     owner: OWNER,
@@ -544,11 +461,7 @@ async function reviewCommentList(octokit, prStr) {
  * @param {string} commentStr - Comment ID as a string from argv.
  */
 async function reviewCommentView(octokit, commentStr) {
-  const comment_id = Number.parseInt(commentStr, 10);
-  if (Number.isNaN(comment_id)) {
-    console.error(`ERROR: invalid comment ID '${commentStr}'`);
-    process.exit(1);
-  }
+  const comment_id = parseIntArg(commentStr, 'comment ID');
 
   const { data } = await octokit.rest.pulls.getReviewComment({
     owner: OWNER,
@@ -584,23 +497,10 @@ async function reviewCommentView(octokit, commentStr) {
  * @param {string} commentStr - Comment ID as a string from argv.
  */
 async function reviewCommentReply(octokit, prStr, commentStr) {
-  const pull_number = Number.parseInt(prStr, 10);
-  if (Number.isNaN(pull_number)) {
-    console.error(`ERROR: invalid PR number '${prStr}'`);
-    process.exit(1);
-  }
+  const pull_number = parseIntArg(prStr, 'PR number');
+  const comment_id = parseIntArg(commentStr, 'comment ID');
 
-  const comment_id = Number.parseInt(commentStr, 10);
-  if (Number.isNaN(comment_id)) {
-    console.error(`ERROR: invalid comment ID '${commentStr}'`);
-    process.exit(1);
-  }
-
-  const body = getArg('--body');
-  if (!body) {
-    console.error('ERROR: --body is required for review-comment reply');
-    process.exit(1);
-  }
+  const body = requireArg(getArg, '--body', '--body is required for review-comment reply');
 
   const { data } = await octokit.rest.pulls.createReplyForReviewComment({
     owner: OWNER,
@@ -669,11 +569,7 @@ async function checksList(octokit, prOrRef) {
  * @param {string} checkRunStr - Check run ID as a string from argv.
  */
 async function checksView(octokit, checkRunStr) {
-  const check_run_id = Number.parseInt(checkRunStr, 10);
-  if (Number.isNaN(check_run_id)) {
-    console.error(`ERROR: invalid check run ID '${checkRunStr}'`);
-    process.exit(1);
-  }
+  const check_run_id = parseIntArg(checkRunStr, 'check run ID');
 
   const { data } = await octokit.rest.checks.get({
     owner: OWNER,
@@ -710,11 +606,7 @@ async function checksView(octokit, checkRunStr) {
  * @param {string} checkRunStr - Check run ID as a string from argv.
  */
 async function checksAnnotations(octokit, checkRunStr) {
-  const check_run_id = Number.parseInt(checkRunStr, 10);
-  if (Number.isNaN(check_run_id)) {
-    console.error(`ERROR: invalid check run ID '${checkRunStr}'`);
-    process.exit(1);
-  }
+  const check_run_id = parseIntArg(checkRunStr, 'check run ID');
 
   const all = await octokit.paginate(octokit.rest.checks.listAnnotations, {
     owner: OWNER,
@@ -745,11 +637,7 @@ async function checksAnnotations(octokit, checkRunStr) {
  */
 async function runList(octokit) {
   const limitStr = getArg('--limit');
-  const per_page = limitStr ? Number.parseInt(limitStr, 10) : 10;
-  if (Number.isNaN(per_page)) {
-    console.error(`ERROR: invalid --limit value '${limitStr}'`);
-    process.exit(1);
-  }
+  const per_page = limitStr ? parseIntArg(limitStr, '--limit value') : 10;
 
   const status = getArg('--status') ?? undefined;
 
@@ -780,11 +668,7 @@ async function runList(octokit) {
  * @param {string} runStr - Run ID as a string from argv.
  */
 async function runView(octokit, runStr) {
-  const run_id = Number.parseInt(runStr, 10);
-  if (Number.isNaN(run_id)) {
-    console.error(`ERROR: invalid run ID '${runStr}'`);
-    process.exit(1);
-  }
+  const run_id = parseIntArg(runStr, 'run ID');
 
   const { data } = await octokit.rest.actions.getWorkflowRun({
     owner: OWNER,
@@ -820,11 +704,7 @@ async function runView(octokit, runStr) {
  * @param {string} runStr - Run ID as a string from argv.
  */
 async function runRerun(octokit, runStr) {
-  const run_id = Number.parseInt(runStr, 10);
-  if (Number.isNaN(run_id)) {
-    console.error(`ERROR: invalid run ID '${runStr}'`);
-    process.exit(1);
-  }
+  const run_id = parseIntArg(runStr, 'run ID');
 
   const failedOnly = args.includes('--failed-only');
 
@@ -853,11 +733,7 @@ async function runRerun(octokit, runStr) {
  * @param {string} runStr - Run ID as a string from argv.
  */
 async function runLogs(octokit, runStr) {
-  const run_id = Number.parseInt(runStr, 10);
-  if (Number.isNaN(run_id)) {
-    console.error(`ERROR: invalid run ID '${runStr}'`);
-    process.exit(1);
-  }
+  const run_id = parseIntArg(runStr, 'run ID');
 
   const all = await octokit.paginate(octokit.rest.actions.listJobsForWorkflowRun, {
     owner: OWNER,
@@ -887,11 +763,7 @@ async function runLogs(octokit, runStr) {
  * @param {string} runStr - Run ID as a string from argv.
  */
 async function runCancel(octokit, runStr) {
-  const run_id = Number.parseInt(runStr, 10);
-  if (Number.isNaN(run_id)) {
-    console.error(`ERROR: invalid run ID '${runStr}'`);
-    process.exit(1);
-  }
+  const run_id = parseIntArg(runStr, 'run ID');
 
   await octokit.rest.actions.cancelWorkflowRun({
     owner: OWNER,

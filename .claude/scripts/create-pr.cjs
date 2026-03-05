@@ -20,22 +20,13 @@ const { execSync } = require('node:child_process');
 const { readFileSync } = require('node:fs');
 
 const { createGitHubClient, OWNER, REPO } = require('./lib/github-client.cjs');
+const { createArgParser, requireArg } = require('./lib/cli-args.cjs');
 
 // ---------------------------------------------------------------------------
 // Arg parsing
 // ---------------------------------------------------------------------------
 
-const args = process.argv.slice(2);
-
-/**
- * Return the value of a named CLI argument, or null if not present.
- * @param {string} name - Argument name including leading dashes, e.g. '--title'
- * @returns {string|null}
- */
-function getArg(name) {
-  const idx = args.indexOf(name);
-  return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : null;
-}
+const { getArg } = createArgParser(process.argv.slice(2));
 
 // ---------------------------------------------------------------------------
 // Git helpers
@@ -94,11 +85,7 @@ function bodyFromCommits(commits) {
  * the GitHub REST API. Prints the PR URL to stdout on success.
  */
 async function main() {
-  const title = getArg('--title');
-  if (!title) {
-    console.error('ERROR: --title is required');
-    process.exit(1);
-  }
+  const title = requireArg(getArg, '--title', '--title is required');
 
   const base = getArg('--base') ?? 'main';
   const head = currentBranch();
