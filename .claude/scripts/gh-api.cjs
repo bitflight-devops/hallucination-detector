@@ -349,6 +349,7 @@ async function reviewList(octokit, prStr) {
     owner: OWNER,
     repo: REPO,
     pull_number,
+    per_page: 100,
   });
 
   const reviews = all.map((r) => ({
@@ -521,6 +522,7 @@ async function reviewCommentList(octokit, prStr) {
     owner: OWNER,
     repo: REPO,
     pull_number,
+    per_page: 100,
   });
 
   const comments = all.map((c) => ({
@@ -639,12 +641,7 @@ async function checksList(octokit, prOrRef) {
 
   const prNumber = Number.parseInt(prOrRef, 10);
   if (!Number.isNaN(prNumber)) {
-    const { data: pr } = await octokit.rest.pulls.get({
-      owner: OWNER,
-      repo: REPO,
-      pull_number: prNumber,
-    });
-    ref = pr.head.sha;
+    ref = `refs/pull/${prNumber}/merge`;
   }
 
   const all = await octokit.paginate(octokit.rest.checks.listForRef, {
@@ -723,6 +720,7 @@ async function checksAnnotations(octokit, checkRunStr) {
     owner: OWNER,
     repo: REPO,
     check_run_id,
+    per_page: 100,
   });
 
   const annotations = all.map((a) => ({
@@ -865,6 +863,7 @@ async function runLogs(octokit, runStr) {
     owner: OWNER,
     repo: REPO,
     run_id,
+    per_page: 100,
   });
 
   const jobs = all.map((j) => ({

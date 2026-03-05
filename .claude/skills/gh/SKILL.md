@@ -53,26 +53,27 @@ node .claude/scripts/gh-api.cjs label create --name "priority:p0" --color "D73A4
 
 # PR Reviews
 node .claude/scripts/gh-api.cjs review list 27
-node .claude/scripts/gh-api.cjs review view 27 --review-id 123456
+node .claude/scripts/gh-api.cjs review view 27 123456
 node .claude/scripts/gh-api.cjs review submit 27 --event APPROVE --body "LGTM"
-node .claude/scripts/gh-api.cjs review dismiss 27 --review-id 123456 --message "Outdated"
+node .claude/scripts/gh-api.cjs review dismiss 27 123456 --message "Outdated"
 
 # Code Annotation Comments (PR review comments)
 node .claude/scripts/gh-api.cjs review-comment list 27
-node .claude/scripts/gh-api.cjs review-comment view --comment-id 123456
-node .claude/scripts/gh-api.cjs review-comment reply 27 --comment-id 123456 --body "Fixed"
+node .claude/scripts/gh-api.cjs review-comment view 123456
+node .claude/scripts/gh-api.cjs review-comment reply 27 123456 --body "Fixed"
 
-# CI Check Runs
-node .claude/scripts/gh-api.cjs checks list --ref main
-node .claude/scripts/gh-api.cjs checks view --check-run-id 123456
-node .claude/scripts/gh-api.cjs checks annotations --check-run-id 123456
+# CI Check Runs (accepts PR number or git ref/SHA)
+node .claude/scripts/gh-api.cjs checks list 27
+node .claude/scripts/gh-api.cjs checks list main
+node .claude/scripts/gh-api.cjs checks view 123456
+node .claude/scripts/gh-api.cjs checks annotations 123456
 
 # Workflow Runs
-node .claude/scripts/gh-api.cjs run list
-node .claude/scripts/gh-api.cjs run view --run-id 123456
-node .claude/scripts/gh-api.cjs run rerun --run-id 123456
-node .claude/scripts/gh-api.cjs run logs --run-id 123456
-node .claude/scripts/gh-api.cjs run cancel --run-id 123456
+node .claude/scripts/gh-api.cjs run list [--limit 10] [--status completed]
+node .claude/scripts/gh-api.cjs run view 123456
+node .claude/scripts/gh-api.cjs run rerun 123456 [--failed-only]
+node .claude/scripts/gh-api.cjs run logs 123456
+node .claude/scripts/gh-api.cjs run cancel 123456
 ```
 
 All output is JSON to stdout. Errors go to stderr with exit code 1.
