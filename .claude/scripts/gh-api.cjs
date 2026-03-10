@@ -486,6 +486,25 @@ async function prMerge(octokit, prStr) {
       pull_number,
     });
 
+    // If checks already passed, enablePullRequestAutoMerge fails with
+    // "Pull request is in clean status". Fall back to a direct merge.
+    if (pr.mergeable_state === 'clean' || pr.mergeable_state === 'unstable') {
+      await octokit.rest.pulls.merge({
+        owner: OWNER,
+        repo: REPO,
+        pull_number,
+        merge_method: method,
+      });
+      console.log(
+        JSON.stringify(
+          { merged: true, method: 'direct', mergeable_state: pr.mergeable_state },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+
     const mergeMethodGql = method.toUpperCase();
 
     await octokit.graphql(
@@ -561,7 +580,85 @@ async function prList(octokit) {
     html_url: p.html_url,
   }));
 
+  const format = getArg('--format');
+  if (format === 'table') {
+    const COL = { NUMBER: 8, TITLE: 52, STATE: 10, HEAD_BRANCH: 50 };
+    const pad = (s, n) =>
+      String(s ?? '')
+        .slice(0, n)
+        .padEnd(n);
+    const header = `${'NUMBER'.padEnd(COL.NUMBER)}  ${'TITLE'.padEnd(COL.TITLE)}  ${'STATE'.padEnd(COL.STATE)}  HEAD_BRANCH`;
+    const divider = '-'.repeat(header.length);
+    console.log(header);
+    console.log(divider);
+    for (const p of prs) {
+      console.log(
+        `${pad(p.number, COL.NUMBER)}  ${pad(p.title, COL.TITLE)}  ${pad(p.state, COL.STATE)}  ${pad(p.head, COL.HEAD_BRANCH)}`,
+      );
+    }
+    return;
+  }
+
   console.log(JSON.stringify(prs, null, 2));
+}
+
+/**
+ * Show details of a single pull request.
+ *
+ * Without --json, prints a human-readable summary.
+ * With --json field1,field2,..., outputs a JSON object with only those fields.
+ *
+ * Supported --json fields:
+ *   number, title, state, mergedAt, mergeCommit, headRefName, baseRefName,
+ *   author, url, body
+ *
+ * @param {import('octokit').Octokit} octokit
+ * @param {string} prStr - PR number as a string from argv.
+ */
+async function prView(octokit, prStr) {
+  const pull_number = parseIntArg(prStr, 'PR number');
+
+  const { data } = await octokit.rest.pulls.get({
+    owner: OWNER,
+    repo: REPO,
+    pull_number,
+  });
+
+  const full = {
+    number: data.number,
+    title: data.title,
+    state: data.state,
+    mergedAt: data.merged_at ?? null,
+    mergeCommit: data.merge_commit_sha ?? null,
+    headRefName: data.head.ref,
+    baseRefName: data.base.ref,
+    author: data.user?.login ?? null,
+    url: data.html_url,
+    body: data.body ?? null,
+  };
+
+  const jsonFields = getArg('--json');
+  if (jsonFields) {
+    const fields = jsonFields.split(',').map((f) => f.trim());
+    const filtered = Object.fromEntries(
+      fields.filter((f) => Object.hasOwn(full, f)).map((f) => [f, full[f]]),
+    );
+    console.log(JSON.stringify(filtered, null, 2));
+    return;
+  }
+
+  // Human-readable summary
+  const lines = [
+    `#${full.number}  ${full.title}`,
+    `State:   ${full.state}`,
+    `Author:  ${full.author ?? 'unknown'}`,
+    `Branch:  ${full.headRefName} → ${full.baseRefName}`,
+    `URL:     ${full.url}`,
+  ];
+  if (full.mergedAt) {
+    lines.push(`Merged:  ${full.mergedAt}`);
+  }
+  console.log(lines.join('\n'));
 }
 
 /**
@@ -1042,6 +1139,25 @@ async function runList(octokit) {
     html_url: r.html_url,
   }));
 
+  const format = getArg('--format');
+  if (format === 'table') {
+    const COL = { STATUS: 12, CONCLUSION: 12, BRANCH: 50, ID: 14 };
+    const pad = (s, n) =>
+      String(s ?? '')
+        .slice(0, n)
+        .padEnd(n);
+    const header = `${'STATUS'.padEnd(COL.STATUS)}  ${'CONCLUSION'.padEnd(COL.CONCLUSION)}  ${'BRANCH'.padEnd(COL.BRANCH)}  ID`;
+    const divider = '-'.repeat(header.length);
+    console.log(header);
+    console.log(divider);
+    for (const r of runs) {
+      console.log(
+        `${pad(r.status, COL.STATUS)}  ${pad(r.conclusion ?? '', COL.CONCLUSION)}  ${pad(r.head_branch, COL.BRANCH)}  ${r.id}`,
+      );
+    }
+    return;
+  }
+
   console.log(JSON.stringify(runs, null, 2));
 }
 
@@ -1157,6 +1273,54 @@ async function runCancel(octokit, runStr) {
   console.log(JSON.stringify({ id: run_id, message: 'Run cancelled' }, null, 2));
 }
 
+/**
+ * Poll a workflow run until it reaches 'completed' status, then print the result.
+ * @param {import('octokit').Octokit} octokit
+ * @param {string} runStr - Run ID as a string from argv.
+ */
+async function runWait(octokit, runStr) {
+  const run_id = parseIntArg(runStr, 'run ID');
+  const timeout = parseInt(getArg('--timeout') ?? '300', 10);
+  const interval = parseInt(getArg('--interval') ?? '10', 10);
+  const format = getArg('--format') ?? 'table';
+  const deadline = Date.now() + timeout * 1000;
+
+  while (Date.now() < deadline) {
+    const { data } = await octokit.rest.actions.getWorkflowRun({
+      owner: OWNER,
+      repo: REPO,
+      run_id,
+    });
+
+    if (data.status === 'completed') {
+      if (format === 'json') {
+        console.log(JSON.stringify(data, null, 2));
+      } else {
+        const COL = { STATUS: 12, CONCLUSION: 12, BRANCH: 50, ID: 14 };
+        const pad = (s, n) =>
+          String(s ?? '')
+            .slice(0, n)
+            .padEnd(n);
+        const header = `${'STATUS'.padEnd(COL.STATUS)}  ${'CONCLUSION'.padEnd(COL.CONCLUSION)}  ${'BRANCH'.padEnd(COL.BRANCH)}  ID`;
+        const divider = '-'.repeat(header.length);
+        console.log(header);
+        console.log(divider);
+        console.log(
+          `${pad(data.status, COL.STATUS)}  ${pad(data.conclusion ?? '', COL.CONCLUSION)}  ${pad(data.head_branch, COL.BRANCH)}  ${data.id}`,
+        );
+      }
+
+      const successConclusions = ['success', 'skipped', 'neutral'];
+      process.exit(successConclusions.includes(data.conclusion) ? 0 : 1);
+    }
+
+    await new Promise((r) => setTimeout(r, interval * 1000));
+  }
+
+  console.error(`Timed out waiting for run ${run_id} after ${timeout}s`);
+  process.exit(2);
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -1178,7 +1342,8 @@ async function main() {
         '  issue comment view <comment-id>\n' +
         '  issue comment search <number> --user <login> --section <heading> [--source comments|reviews]\n' +
         '  issue comment react <comment-id> --reaction <+1|-1|laugh|confused|heart|hooray|rocket|eyes>\n' +
-        '  pr list\n' +
+        '  pr list [--format table]\n' +
+        '  pr view <number> [--json field1,field2,...]\n' +
         '  pr create --title "..." [--base main] [--body "..."]\n' +
         '  pr merge <number> [--method squash|merge|rebase] [--auto]\n' +
         '  label list\n' +
@@ -1194,11 +1359,12 @@ async function main() {
         '  checks list <pr-number-or-ref>\n' +
         '  checks view <check-run-id>\n' +
         '  checks annotations <check-run-id>\n' +
-        '  run list [--limit 10] [--status <queued|in_progress|completed>]\n' +
+        '  run list [--limit 10] [--status <queued|in_progress|completed>] [--format table]\n' +
         '  run view <run-id>\n' +
         '  run rerun <run-id> [--failed-only]\n' +
         '  run logs <run-id>\n' +
-        '  run cancel <run-id>',
+        '  run cancel <run-id>\n' +
+        '  run wait <run-id> [--timeout 300] [--interval 10] [--format table|json]',
     );
     process.exit(1);
   }
@@ -1260,6 +1426,13 @@ async function main() {
       await prList(octokit);
     } else if (action === 'create') {
       await prCreate(octokit);
+    } else if (action === 'view') {
+      const [prStr] = rest;
+      if (!prStr) {
+        console.error('ERROR: pr view requires a PR number');
+        process.exit(1);
+      }
+      await prView(octokit, prStr);
     } else if (action === 'merge') {
       const [prStr] = rest;
       if (!prStr) {
@@ -1403,6 +1576,13 @@ async function main() {
         process.exit(1);
       }
       await runCancel(octokit, runStr);
+    } else if (action === 'wait') {
+      const [runStr] = rest;
+      if (!runStr) {
+        console.error('ERROR: run wait requires a run ID');
+        process.exit(1);
+      }
+      await runWait(octokit, runStr);
     } else {
       console.error(`ERROR: unknown run action '${action}'`);
       process.exit(1);
