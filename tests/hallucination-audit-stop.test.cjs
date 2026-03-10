@@ -100,6 +100,33 @@ describe('speculation language', () => {
     );
     expect(specMatches.length).toBeGreaterThan(0);
   });
+
+  it('flags "may" in speculative context', () => {
+    const matches = findTriggerMatches('This may cause an issue.');
+    const specMatches = matches.filter(
+      (m) => m.kind === 'speculation_language' && m.evidence.includes('may'),
+    );
+    expect(specMatches.length).toBeGreaterThan(0);
+  });
+
+  it('flags "may not" in speculative context', () => {
+    const matches = findTriggerMatches('This may not work correctly.');
+    const kinds = matches.map((m) => m.kind);
+    expect(kinds).toContain('speculation_language');
+  });
+
+  it('does not flag permissive/instructional "may"', () => {
+    // "You may use this feature" — permissive grant, not speculation
+    const matches = findTriggerMatches('You may use this feature.');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBe(0);
+  });
+
+  it('does not flag "May" in a question (already suppressed by isIndexWithinQuestion)', () => {
+    const matches = findTriggerMatches('May I ask a question?');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBe(0);
+  });
 });
 
 // =============================================================================
@@ -813,6 +840,7 @@ describe('block reason self-trigger regression', () => {
       'might be',
       'could be',
       'presumably',
+      'may',
       'should be',
       'should be (epistemic)',
     ];

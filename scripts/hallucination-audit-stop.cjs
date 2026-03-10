@@ -259,12 +259,21 @@ function findTriggerMatches(text) {
     'might be',
     'could be',
     'presumably',
+    'may',
   ];
+  // Pronouns that precede "may" in permissive/instructional usage ("you may use").
+  const PERMISSIVE_MAY_PRONOUNS = new Set(['you', 'one', 'anyone', 'users', 'they', 'we']);
   for (const phrase of speculationPhrases) {
     const idx = lower.indexOf(phrase);
     if (idx !== -1) {
       // Questions like "Should I do that now?" are desirable—don't flag.
       if (isIndexWithinQuestion(haystack, idx)) continue;
+      // Suppress permissive "may" when preceded by a permission-granting pronoun.
+      if (phrase === 'may') {
+        const before = lower.slice(0, idx).trimEnd();
+        const lastWord = before.slice(before.lastIndexOf(' ') + 1);
+        if (PERMISSIVE_MAY_PRONOUNS.has(lastWord)) continue;
+      }
       matches.push({ kind: 'speculation_language', evidence: phrase });
     }
   }
