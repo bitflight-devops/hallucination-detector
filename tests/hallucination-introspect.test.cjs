@@ -1,7 +1,5 @@
 'use strict';
 
-const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
-const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -31,28 +29,28 @@ function makeTempPath(prefix) {
 describe('hashText', () => {
   it('returns a 16-character hex string', () => {
     const result = hashText('hello world');
-    assert.equal(typeof result, 'string');
-    assert.equal(result.length, 16);
-    assert.match(result, /^[0-9a-f]{16}$/);
+    expect(typeof result).toBe('string');
+    expect(result.length).toBe(16);
+    expect(result).toMatch(/^[0-9a-f]{16}$/);
   });
 
   it('same input produces same hash (deterministic)', () => {
     const a = hashText('deterministic input');
     const b = hashText('deterministic input');
-    assert.equal(a, b);
+    expect(a).toBe(b);
   });
 
   it('different inputs produce different hashes', () => {
     const a = hashText('input one');
     const b = hashText('input two');
-    assert.notEqual(a, b);
+    expect(a).not.toBe(b);
   });
 
   it('handles empty string', () => {
     const result = hashText('');
-    assert.equal(typeof result, 'string');
-    assert.equal(result.length, 16);
-    assert.match(result, /^[0-9a-f]{16}$/);
+    expect(typeof result).toBe('string');
+    expect(result.length).toBe(16);
+    expect(result).toMatch(/^[0-9a-f]{16}$/);
   });
 });
 
@@ -75,9 +73,9 @@ describe('appendIntrospectionLog', () => {
     appendIntrospectionLog(tmpFile, entry);
 
     const raw = fs.readFileSync(tmpFile, 'utf-8');
-    assert.ok(raw.trim().length > 0);
+    expect(raw.trim().length).toBeGreaterThan(0);
     const parsed = JSON.parse(raw.trim());
-    assert.equal(parsed.matchCount, 1);
+    expect(parsed.matchCount).toBe(1);
   });
 
   it('appends multiple entries as separate lines', () => {
@@ -88,18 +86,18 @@ describe('appendIntrospectionLog', () => {
 
     const raw = fs.readFileSync(tmpFile, 'utf-8');
     const lines = raw.split('\n').filter((l) => l.trim().length > 0);
-    assert.equal(lines.length, 3);
-    assert.equal(JSON.parse(lines[0]).seq, 1);
-    assert.equal(JSON.parse(lines[1]).seq, 2);
-    assert.equal(JSON.parse(lines[2]).seq, 3);
+    expect(lines.length).toBe(3);
+    expect(JSON.parse(lines[0]).seq).toBe(1);
+    expect(JSON.parse(lines[1]).seq).toBe(2);
+    expect(JSON.parse(lines[2]).seq).toBe(3);
   });
 
   it('silently ignores write failures for invalid paths', () => {
     const invalidPath = '/dev/null/no-such-dir/file.jsonl';
     // Must not throw.
-    assert.doesNotThrow(() => {
+    expect(() => {
       appendIntrospectionLog(invalidPath, { test: true });
-    });
+    }).not.toThrow();
   });
 
   it('each line is valid JSON', () => {
@@ -110,7 +108,7 @@ describe('appendIntrospectionLog', () => {
     const raw = fs.readFileSync(tmpFile, 'utf-8');
     const lines = raw.split('\n').filter((l) => l.trim().length > 0);
     for (const line of lines) {
-      assert.doesNotThrow(() => JSON.parse(line), `Line is not valid JSON: ${line}`);
+      expect(() => JSON.parse(line)).not.toThrow();
     }
   });
 });
@@ -121,38 +119,38 @@ describe('appendIntrospectionLog', () => {
 describe('parseArgs', () => {
   it('parses positional arguments', () => {
     const result = parseArgs(['file.jsonl', 'second']);
-    assert.deepEqual(result._positional, ['file.jsonl', 'second']);
+    expect(result._positional).toEqual(['file.jsonl', 'second']);
   });
 
   it('parses --flag value pairs', () => {
     const result = parseArgs(['--line', '3', '--label', 'fp']);
-    assert.equal(result.line, '3');
-    assert.equal(result.label, 'fp');
+    expect(result.line).toBe('3');
+    expect(result.label).toBe('fp');
   });
 
   it('parses boolean flags (--flag without value)', () => {
     const result = parseArgs(['--summary']);
-    assert.equal(result.summary, true);
+    expect(result.summary).toBe(true);
   });
 
   it('handles mixed positional and flag arguments', () => {
     const result = parseArgs(['log.jsonl', '--line', '1', '--label', 'tp', '--summary']);
-    assert.deepEqual(result._positional, ['log.jsonl']);
-    assert.equal(result.line, '1');
-    assert.equal(result.label, 'tp');
-    assert.equal(result.summary, true);
+    expect(result._positional).toEqual(['log.jsonl']);
+    expect(result.line).toBe('1');
+    expect(result.label).toBe('tp');
+    expect(result.summary).toBe(true);
   });
 
   it('handles empty argv', () => {
     const result = parseArgs([]);
-    assert.deepEqual(result._positional, []);
-    assert.equal(Object.keys(result).length, 1); // only _positional
+    expect(result._positional).toEqual([]);
+    expect(Object.keys(result).length).toBe(1); // only _positional
   });
 
   it('treats a flag followed by another flag as boolean', () => {
     const result = parseArgs(['--add-negative', '--text', 'hello']);
-    assert.equal(result['add-negative'], true);
-    assert.equal(result.text, 'hello');
+    expect(result['add-negative']).toBe(true);
+    expect(result.text).toBe('hello');
   });
 });
 
@@ -173,31 +171,31 @@ describe('readJsonlFile', () => {
     tmpFile = makeTempPath('rjf-reads');
     fs.writeFileSync(tmpFile, '{"a":1}\n{"b":2}\n', 'utf-8');
     const entries = readJsonlFile(tmpFile);
-    assert.equal(entries.length, 2);
-    assert.deepEqual(entries[0], { a: 1 });
-    assert.deepEqual(entries[1], { b: 2 });
+    expect(entries.length).toBe(2);
+    expect(entries[0]).toEqual({ a: 1 });
+    expect(entries[1]).toEqual({ b: 2 });
   });
 
   it('returns empty array for non-existent file', () => {
     const nonExistent = path.join(os.tmpdir(), `hd-no-such-${crypto.randomUUID()}.jsonl`);
     const entries = readJsonlFile(nonExistent);
-    assert.deepEqual(entries, []);
+    expect(entries).toEqual([]);
   });
 
   it('skips malformed lines', () => {
     tmpFile = makeTempPath('rjf-malformed');
     fs.writeFileSync(tmpFile, '{"ok":1}\nnot json here\n{"also":"ok"}\n', 'utf-8');
     const entries = readJsonlFile(tmpFile);
-    assert.equal(entries.length, 2);
-    assert.equal(entries[0].ok, 1);
-    assert.equal(entries[1].also, 'ok');
+    expect(entries.length).toBe(2);
+    expect(entries[0].ok).toBe(1);
+    expect(entries[1].also).toBe('ok');
   });
 
   it('handles empty file', () => {
     tmpFile = makeTempPath('rjf-empty');
     fs.writeFileSync(tmpFile, '', 'utf-8');
     const entries = readJsonlFile(tmpFile);
-    assert.deepEqual(entries, []);
+    expect(entries).toEqual([]);
   });
 });
 
@@ -219,17 +217,17 @@ describe('appendJsonlEntry', () => {
     appendJsonlEntry(tmpFile, { x: 42 });
     const raw = fs.readFileSync(tmpFile, 'utf-8');
     const parsed = JSON.parse(raw.trim());
-    assert.equal(parsed.x, 42);
+    expect(parsed.x).toBe(42);
   });
 
   it('creates the file if it does not exist', () => {
     tmpFile = makeTempPath('ajle-create');
-    assert.ok(!fs.existsSync(tmpFile));
+    expect(fs.existsSync(tmpFile)).toBe(false);
     appendJsonlEntry(tmpFile, { created: true });
-    assert.ok(fs.existsSync(tmpFile));
+    expect(fs.existsSync(tmpFile)).toBe(true);
     const entries = readJsonlFile(tmpFile);
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0].created, true);
+    expect(entries.length).toBe(1);
+    expect(entries[0].created).toBe(true);
   });
 });
 
@@ -239,7 +237,7 @@ describe('appendJsonlEntry', () => {
 describe('cmdSummary', () => {
   let tmpFile;
 
-  before(() => {
+  beforeAll(() => {
     tmpFile = makeTempPath('summary-test');
     // Write 3 detection entries and 2 annotation entries.
     const detections = [
@@ -253,6 +251,8 @@ describe('cmdSummary', () => {
           causality_language: 1,
           pseudo_quantification: 0,
           completeness_claim: 0,
+          fabricated_source: 0,
+          evaluative_design_claim: 0,
         },
       },
       {
@@ -265,6 +265,8 @@ describe('cmdSummary', () => {
           causality_language: 0,
           pseudo_quantification: 0,
           completeness_claim: 0,
+          fabricated_source: 0,
+          evaluative_design_claim: 0,
         },
       },
       {
@@ -277,6 +279,8 @@ describe('cmdSummary', () => {
           causality_language: 0,
           pseudo_quantification: 1,
           completeness_claim: 0,
+          fabricated_source: 0,
+          evaluative_design_claim: 0,
         },
       },
     ];
@@ -306,7 +310,7 @@ describe('cmdSummary', () => {
     }
   });
 
-  after(() => {
+  afterAll(() => {
     if (tmpFile && fs.existsSync(tmpFile)) {
       fs.unlinkSync(tmpFile);
     }
@@ -325,7 +329,7 @@ describe('cmdSummary', () => {
       process.stdout.write = originalWrite;
     }
     const output = chunks.join('');
-    assert.ok(output.includes('Total detection entries : 3'), `Output was:\n${output}`);
+    expect(output).toContain('Total detection entries : 3');
   });
 
   it('summary output contains correct would-block count', () => {
@@ -341,7 +345,7 @@ describe('cmdSummary', () => {
       process.stdout.write = originalWrite;
     }
     const output = chunks.join('');
-    assert.ok(output.includes('Would-block events      : 2'), `Output was:\n${output}`);
+    expect(output).toContain('Would-block events      : 2');
   });
 
   it('summary output contains correct annotation count', () => {
@@ -357,7 +361,7 @@ describe('cmdSummary', () => {
       process.stdout.write = originalWrite;
     }
     const output = chunks.join('');
-    assert.ok(output.includes('Total annotations       : 2'), `Output was:\n${output}`);
+    expect(output).toContain('Total annotations       : 2');
   });
 
   it('summary output contains correct total match signals', () => {
@@ -374,7 +378,7 @@ describe('cmdSummary', () => {
     }
     const output = chunks.join('');
     // 2 + 0 + 1 = 3
-    assert.ok(output.includes('Total match signals     : 3'), `Output was:\n${output}`);
+    expect(output).toContain('Total match signals     : 3');
   });
 
   it('summary output contains annotation label counts', () => {
@@ -391,9 +395,9 @@ describe('cmdSummary', () => {
     }
     const output = chunks.join('');
     // 1 fp, 1 tp, 0 fn, 0 tn
-    assert.ok(output.includes('fp (false positive) : 1'), `Output was:\n${output}`);
-    assert.ok(output.includes('tp (true positive)  : 1'), `Output was:\n${output}`);
-    assert.ok(output.includes('fn (false negative) : 0'), `Output was:\n${output}`);
+    expect(output).toContain('fp (false positive) : 1');
+    expect(output).toContain('tp (true positive)  : 1');
+    expect(output).toContain('fn (false negative) : 0');
   });
 });
 
@@ -426,6 +430,8 @@ describe('cmdAnnotate', () => {
         causality_language: 0,
         pseudo_quantification: 0,
         completeness_claim: 0,
+        fabricated_source: 0,
+        evaluative_design_claim: 0,
       },
     };
     appendJsonlEntry(tmpFile, detection);
@@ -450,14 +456,14 @@ describe('cmdAnnotate', () => {
 
     const entries = readJsonlFile(tmpFile);
     // Original detection + appended annotation = 2 entries.
-    assert.equal(entries.length, 2);
+    expect(entries.length).toBe(2);
     const annotation = entries[1];
-    assert.equal(annotation.type, 'annotation');
-    assert.equal(annotation.label, 'fp');
-    assert.equal(annotation.targetLine, 1);
-    assert.equal(annotation.category, 'speculation_language');
-    assert.equal(annotation.note, 'test note');
-    assert.equal(annotation.targetHash, 'abcd1234abcd1234');
+    expect(annotation.type).toBe('annotation');
+    expect(annotation.label).toBe('fp');
+    expect(annotation.targetLine).toBe(1);
+    expect(annotation.category).toBe('speculation_language');
+    expect(annotation.note).toBe('test note');
+    expect(annotation.targetHash).toBe('abcd1234abcd1234');
   });
 
   it('annotation entry has a timestamp', () => {
@@ -471,6 +477,8 @@ describe('cmdAnnotate', () => {
         causality_language: 0,
         pseudo_quantification: 0,
         completeness_claim: 0,
+        fabricated_source: 0,
+        evaluative_design_claim: 0,
       },
     };
     appendJsonlEntry(tmpFile, detection);
@@ -485,8 +493,8 @@ describe('cmdAnnotate', () => {
 
     const entries = readJsonlFile(tmpFile);
     const annotation = entries[1];
-    assert.ok(typeof annotation.timestamp === 'string');
-    assert.ok(annotation.timestamp.length > 0);
+    expect(typeof annotation.timestamp).toBe('string');
+    expect(annotation.timestamp.length).toBeGreaterThan(0);
   });
 });
 
@@ -521,12 +529,12 @@ describe('cmdAddNegative', () => {
     }
 
     const entries = readJsonlFile(tmpFile);
-    assert.equal(entries.length, 1);
+    expect(entries.length).toBe(1);
     const entry = entries[0];
-    assert.equal(entry.type, 'missed_detection');
-    assert.equal(entry.text, 'This is clearly speculative phrasing.');
-    assert.equal(entry.expectedCategory, 'speculation_language');
-    assert.equal(entry.note, 'should have been flagged');
+    expect(entry.type).toBe('missed_detection');
+    expect(entry.text).toBe('This is clearly speculative phrasing.');
+    expect(entry.expectedCategory).toBe('speculation_language');
+    expect(entry.note).toBe('should have been flagged');
   });
 
   it('entry has a timestamp', () => {
@@ -540,8 +548,8 @@ describe('cmdAddNegative', () => {
 
     const entries = readJsonlFile(tmpFile);
     const entry = entries[0];
-    assert.ok(typeof entry.timestamp === 'string');
-    assert.ok(entry.timestamp.length > 0);
+    expect(typeof entry.timestamp).toBe('string');
+    expect(entry.timestamp.length).toBeGreaterThan(0);
   });
 
   it('note defaults to null when not provided', () => {
@@ -554,11 +562,11 @@ describe('cmdAddNegative', () => {
     }
 
     const entries = readJsonlFile(tmpFile);
-    assert.equal(entries[0].note, null);
+    expect(entries[0].note).toBeNull();
   });
 
   it('creates the log file if it does not exist', () => {
-    assert.ok(!fs.existsSync(tmpFile));
+    expect(fs.existsSync(tmpFile)).toBe(false);
     const originalWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = () => true;
     try {
@@ -566,6 +574,6 @@ describe('cmdAddNegative', () => {
     } finally {
       process.stdout.write = originalWrite;
     }
-    assert.ok(fs.existsSync(tmpFile));
+    expect(fs.existsSync(tmpFile)).toBe(true);
   });
 });

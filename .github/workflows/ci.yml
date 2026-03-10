@@ -122,15 +122,25 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Run tests
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run tests with coverage
+        run: pnpm test --coverage 2>&1 | tee /tmp/test-output.txt; EXIT_CODE=${PIPESTATUS[0]}; exit $EXIT_CODE
+
+      - name: Upload coverage summary to job summary
+        if: always()
         run: |
-          if [ -f package.json ] && node -e "const p = require('./package.json'); process.exit(p.scripts && p.scripts.test ? 0 : 1)" 2>/dev/null; then
-            npm install --ignore-scripts
-            npm test
-          else
-            echo "No test script defined — running smoke test"
-            node scripts/hallucination-audit-stop.cjs < /dev/null || true
-            echo "Smoke test passed (script loaded without crash)"
+          if grep -q "Coverage report from" /tmp/test-output.txt 2>/dev/null; then
+            echo "## Test Coverage" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            sed -n '/Coverage report from/,/^$/p' /tmp/test-output.txt | head -20 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
   # =============================================================================

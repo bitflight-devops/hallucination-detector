@@ -20,6 +20,14 @@
     }
   },
   "files": {
-    "includes": ["**/*.cjs", "**/*.js", "**/*.mjs", "**/*.json", "!**/node_modules", "!**/dist"]
+    "includes": [
+      "**/*.cjs",
+      "**/*.js",
+      "**/*.mjs",
+      "**/*.json",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/coverage"
+    ]
   }
 }

@@ -15,7 +15,9 @@ const path = require('node:path');
 
 /**
  * Default weights for each detection category.
- * Must sum to 1.0 for aggregate scores to be in [0, 1].
+ * Weights are relative severity signals; `aggregateWeightedScore` normalizes
+ * by their sum so aggregate scores always remain in [0, 1] regardless of
+ * whether the weights themselves sum to 1.0.
  */
 const DEFAULT_WEIGHTS = {
   speculation_language: 0.25,
@@ -23,6 +25,7 @@ const DEFAULT_WEIGHTS = {
   pseudo_quantification: 0.15,
   completeness_claim: 0.2,
   fabricated_source: 0.1,
+  evaluative_design_claim: 0.4,
 };
 
 /**

@@ -14,6 +14,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { DEFAULT_WEIGHTS } = require('./hallucination-config.cjs');
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -215,12 +216,7 @@ function cmdSummary(logPath) {
   }
 
   // Per-category breakdown from detection entries
-  const categoryTotals = {
-    speculation_language: 0,
-    causality_language: 0,
-    pseudo_quantification: 0,
-    completeness_claim: 0,
-  };
+  const categoryTotals = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
   let totalWouldBlock = 0;
   let totalMatches = 0;
 
