@@ -1,3 +1,9 @@
+## [1.9.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.8.0...v1.9.0) (2026-03-10)
+
+### Features
+
+- **detection:** add 'may' as speculation phrase with permissive-usage suppression ([da8b7b6](https://github.com/bitflight-devops/hallucination-detector/commit/da8b7b6ffc723889f92ec0a636515964acb7ef53))
+
 ## [1.8.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.7.0...v1.8.0) (2026-03-10)
 
 ### Features
