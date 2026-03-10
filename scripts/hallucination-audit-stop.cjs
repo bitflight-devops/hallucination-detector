@@ -142,7 +142,7 @@ const EVIDENCE_MARKERS = [
 const BACKTICK_RE = /`[^`\n]+`/; // inline code — tested against raw (pre-strip) text
 
 // Evaluative design tell phrases — exact multi-word phrases only; near-zero false-positive risk.
-// The `g` flag is required so the while-loop in findTriggerMatches() can iterate all occurrences.
+// The `g` flag is required so the for...of loop in findTriggerMatches() can iterate all occurrences.
 const EVALUATIVE_DESIGN_TELLS =
   /\b(?:the\s+cleanest\s+fix|the\s+simplest\s+fix|cleanest\s+solution|simplest\s+solution|cleanest\s+approach|simplest\s+approach|the\s+obvious\s+fix|the\s+obvious\s+solution)\b/gi;
 

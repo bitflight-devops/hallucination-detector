@@ -813,6 +813,32 @@ describe('block reason self-trigger regression', () => {
     }
   });
 
+  it('normalizes embedded newlines in evidence to single spaces', () => {
+    const matches = [{ kind: 'speculation_language', evidence: 'the\ncleanest\nfix', offset: 0 }];
+    const reason = buildBlockReason(matches);
+    // The evidence line is the second line of the "Detected trigger language" section.
+    // Extract just that line to confirm newlines were collapsed before wrapping in backticks.
+    const evidenceLine = reason.split('\n').find((l) => l.startsWith('- speculation_language:'));
+    expect(evidenceLine).toBeDefined();
+    expect(evidenceLine).toContain('`the cleanest fix`');
+    expect(evidenceLine).not.toContain('\n');
+  });
+
+  it('escapes embedded backticks in evidence to prevent breaking inline code span', () => {
+    const matches = [{ kind: 'speculation_language', evidence: 'the `cleanest` fix', offset: 0 }];
+    const reason = buildBlockReason(matches);
+    // Extract just the evidence line — the static instruction text must not interfere.
+    const evidenceLine = reason.split('\n').find((l) => l.startsWith('- speculation_language:'));
+    expect(evidenceLine).toBeDefined();
+    // Backticks replaced with single quotes so the span is a single inline-code token.
+    expect(evidenceLine).toContain("`the 'cleanest' fix`");
+    // The evidence span must open and close exactly once: one ` at start, one ` at end.
+    const span = evidenceLine.replace(/^- speculation_language: /, '');
+    expect(span.startsWith('`')).toBe(true);
+    expect(span.endsWith('`')).toBe(true);
+    expect(span.slice(1, -1)).not.toContain('`');
+  });
+
   it('full reason string with one match per category does not re-trigger findTriggerMatches', () => {
     // Self-maintaining canary: if anyone adds a bare trigger word to the static
     // instruction text or changes the evidence snippet format so it is no longer
