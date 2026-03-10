@@ -4,7 +4,7 @@
   "description": "Stop-hook that audits assistant output for speculation, ungrounded causality, pseudo-quantification, and completeness overclaims",
   "main": "scripts/hallucination-audit-stop.cjs",
   "scripts": {
-    "test": "node --test 'tests/**/*.test.cjs'",
+    "test": "vitest run",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
@@ -39,11 +39,13 @@
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
     "@semantic-release/npm": "^13.0.0",
+    "@vitest/coverage-v8": "^4.0.18",
     "gray-matter": "^4.0.3",
     "husky": "^9.1.7",
     "octokit": "^5.0.5",
     "semantic-release": "^25.0.3",
     "undici": "^7.22.0",
+    "vitest": "^4.0.18",
     "yaml": "^2.8.2"
   },
   "overrides": {

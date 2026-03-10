@@ -1,5 +1,5 @@
-const { describe, it } = require('node:test');
-const assert = require('node:assert/strict');
+'use strict';
+
 const { readFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 
@@ -16,7 +16,7 @@ describe('repair-from-original-register script structure', () => {
       'scripts',
       'repair-from-original-register.cjs',
     );
-    assert.ok(existsSync(scriptPath));
+    expect(existsSync(scriptPath)).toBe(true);
   });
 
   it('imports required dependencies', () => {
@@ -29,12 +29,12 @@ describe('repair-from-original-register script structure', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes("require('node:fs')"));
-    assert.ok(content.includes("require('node:path')"));
-    assert.ok(content.includes("require('octokit')"));
-    assert.ok(content.includes("require('gray-matter')"));
-    assert.ok(content.includes("require('yaml')"));
-    assert.ok(content.includes("require('./lib/story-helpers.cjs')"));
+    expect(content).toContain("require('node:fs')");
+    expect(content).toContain("require('node:path')");
+    expect(content).toContain("require('octokit')");
+    expect(content).toContain("require('gray-matter')");
+    expect(content).toContain("require('yaml')");
+    expect(content).toContain("require('./lib/story-helpers.cjs')");
   });
 
   it('defines required constants', () => {
@@ -47,11 +47,11 @@ describe('repair-from-original-register script structure', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('REPO_ROOT'));
-    assert.ok(content.includes('REGISTER_PATH'));
-    assert.ok(content.includes('BACKLOG_DIR'));
-    assert.ok(content.includes('FIELD_MAP'));
-    assert.ok(content.includes('MULTILINE_FIELDS'));
+    expect(content).toContain('REPO_ROOT');
+    expect(content).toContain('REGISTER_PATH');
+    expect(content).toContain('BACKLOG_DIR');
+    expect(content).toContain('FIELD_MAP');
+    expect(content).toContain('MULTILINE_FIELDS');
   });
 });
 
@@ -70,14 +70,14 @@ describe('repair-from-original-register field mapping', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes("'**Source**:'"));
-    assert.ok(content.includes("'**Added**:'"));
-    assert.ok(content.includes("'**Priority**:'"));
-    assert.ok(content.includes("'**Description**:'"));
-    assert.ok(content.includes("'**Research first**:'"));
-    assert.ok(content.includes("'**Suggested location**:'"));
-    assert.ok(content.includes("'**Files**:'"));
-    assert.ok(content.includes("'**Issue**:'"));
+    expect(content).toContain("'**Source**:'");
+    expect(content).toContain("'**Added**:'");
+    expect(content).toContain("'**Priority**:'");
+    expect(content).toContain("'**Description**:'");
+    expect(content).toContain("'**Research first**:'");
+    expect(content).toContain("'**Suggested location**:'");
+    expect(content).toContain("'**Files**:'");
+    expect(content).toContain("'**Issue**:'");
   });
 
   it('defines MULTILINE_FIELDS for multi-line content', () => {
@@ -90,9 +90,9 @@ describe('repair-from-original-register field mapping', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('MULTILINE_FIELDS'));
-    assert.ok(content.includes("'**Description**:'"));
-    assert.ok(content.includes("'**Files**:'"));
+    expect(content).toContain('MULTILINE_FIELDS');
+    expect(content).toContain("'**Description**:'");
+    expect(content).toContain("'**Files**:'");
   });
 
   it('uses regex pattern for separator lines', () => {
@@ -105,7 +105,7 @@ describe('repair-from-original-register field mapping', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('SEPARATOR_LINE_RE'));
+    expect(content).toContain('SEPARATOR_LINE_RE');
   });
 });
 
@@ -124,7 +124,7 @@ describe('repair-from-original-register parsing functions', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function detectPriority'));
+    expect(content).toContain('function detectPriority');
   });
 
   it('detects P0, P1, P2, Ideas, and Completed sections', () => {
@@ -137,11 +137,11 @@ describe('repair-from-original-register parsing functions', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes("'## P0'"));
-    assert.ok(content.includes("'## P1'"));
-    assert.ok(content.includes("'## P2'"));
-    assert.ok(content.includes("'## Ideas'"));
-    assert.ok(content.includes("'## Completed'"));
+    expect(content).toContain("'## P0'");
+    expect(content).toContain("'## P1'");
+    expect(content).toContain("'## P2'");
+    expect(content).toContain("'## Ideas'");
+    expect(content).toContain("'## Completed'");
   });
 
   it('contains matchFieldPrefix function', () => {
@@ -154,7 +154,7 @@ describe('repair-from-original-register parsing functions', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function matchFieldPrefix'));
+    expect(content).toContain('function matchFieldPrefix');
   });
 
   it('contains isBoldKeyLine function', () => {
@@ -167,7 +167,7 @@ describe('repair-from-original-register parsing functions', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function isBoldKeyLine'));
+    expect(content).toContain('function isBoldKeyLine');
   });
 
   it('contains collectMultilineValue function', () => {
@@ -180,7 +180,7 @@ describe('repair-from-original-register parsing functions', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function collectMultilineValue'));
+    expect(content).toContain('function collectMultilineValue');
   });
 
   it('contains extractFields function', () => {
@@ -193,7 +193,7 @@ describe('repair-from-original-register parsing functions', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function extractFields'));
+    expect(content).toContain('function extractFields');
   });
 
   it('contains parseRegister function', () => {
@@ -206,7 +206,7 @@ describe('repair-from-original-register parsing functions', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function parseRegister'));
+    expect(content).toContain('function parseRegister');
   });
 
   it('extracts issue number from Issue field', () => {
@@ -219,8 +219,8 @@ describe('repair-from-original-register parsing functions', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('issue_number'));
-    assert.ok(content.includes('/#(\\d+)/'));
+    expect(content).toContain('issue_number');
+    expect(content).toContain('/#(\\d+)/');
   });
 
   it('stores full_body for each item', () => {
@@ -233,7 +233,7 @@ describe('repair-from-original-register parsing functions', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('full_body'));
+    expect(content).toContain('full_body');
   });
 });
 
@@ -252,7 +252,7 @@ describe('repair-from-original-register title matching', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function fuzzyMatch'));
+    expect(content).toContain('function fuzzyMatch');
   });
 
   it('contains matchItemsToIssues function', () => {
@@ -265,7 +265,7 @@ describe('repair-from-original-register title matching', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function matchItemsToIssues'));
+    expect(content).toContain('function matchItemsToIssues');
   });
 
   it('uses normalizeTitle for matching', () => {
@@ -278,7 +278,7 @@ describe('repair-from-original-register title matching', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('normalizeTitle'));
+    expect(content).toContain('normalizeTitle');
   });
 
   it('performs exact match first, then fuzzy match', () => {
@@ -291,8 +291,8 @@ describe('repair-from-original-register title matching', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('issueMap.get'));
-    assert.ok(content.includes('fuzzyMatch'));
+    expect(content).toContain('issueMap.get');
+    expect(content).toContain('fuzzyMatch');
   });
 });
 
@@ -311,7 +311,7 @@ describe('repair-from-original-register per-item file handling', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function findPerItemFile'));
+    expect(content).toContain('function findPerItemFile');
   });
 
   it('searches with priority prefix pattern first', () => {
@@ -325,8 +325,8 @@ describe('repair-from-original-register per-item file handling', () => {
     const content = readFileSync(scriptPath, 'utf8');
 
     // Pattern: {priority}-{slug[:30]}*.md
-    assert.ok(content.includes('p1Prefix'));
-    assert.ok(content.includes('.slice(0, 30)'));
+    expect(content).toContain('p1Prefix');
+    expect(content).toContain('.slice(0, 30)');
   });
 
   it('fallback searches with slug pattern', () => {
@@ -340,8 +340,8 @@ describe('repair-from-original-register per-item file handling', () => {
     const content = readFileSync(scriptPath, 'utf8');
 
     // Pattern: *{slug[:20]}*.md
-    assert.ok(content.includes('slugPrefix'));
-    assert.ok(content.includes('.slice(0, 20)'));
+    expect(content).toContain('slugPrefix');
+    expect(content).toContain('.slice(0, 20)');
   });
 
   it('contains readGroomedContent function', () => {
@@ -354,7 +354,7 @@ describe('repair-from-original-register per-item file handling', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function readGroomedContent'));
+    expect(content).toContain('function readGroomedContent');
   });
 
   it('extracts groomed section from ## Groomed heading', () => {
@@ -367,7 +367,7 @@ describe('repair-from-original-register per-item file handling', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('## Groomed'));
+    expect(content).toContain('## Groomed');
   });
 
   it('contains extractAdditionalContent function', () => {
@@ -380,7 +380,7 @@ describe('repair-from-original-register per-item file handling', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function extractAdditionalContent'));
+    expect(content).toContain('function extractAdditionalContent');
   });
 
   it('filters out covered fields from additional content', () => {
@@ -393,7 +393,7 @@ describe('repair-from-original-register per-item file handling', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('coveredPrefixes'));
+    expect(content).toContain('coveredPrefixes');
   });
 });
 
@@ -412,7 +412,7 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function buildStoryBody'));
+    expect(content).toContain('function buildStoryBody');
   });
 
   it('includes Story section with role-goal-benefit format', () => {
@@ -425,10 +425,10 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('## Story'));
-    assert.ok(content.includes('As a **'));
-    assert.ok(content.includes('I want to **'));
-    assert.ok(content.includes('so that **'));
+    expect(content).toContain('## Story');
+    expect(content).toContain('As a **');
+    expect(content).toContain('I want to **');
+    expect(content).toContain('so that **');
   });
 
   it('includes Description section', () => {
@@ -441,7 +441,7 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('## Description'));
+    expect(content).toContain('## Description');
   });
 
   it('includes Details section for additional content', () => {
@@ -454,7 +454,7 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('## Details'));
+    expect(content).toContain('## Details');
   });
 
   it('includes Files section when present', () => {
@@ -467,7 +467,7 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('## Files'));
+    expect(content).toContain('## Files');
   });
 
   it('includes Suggested Location section when present', () => {
@@ -480,7 +480,7 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('## Suggested Location'));
+    expect(content).toContain('## Suggested Location');
   });
 
   it('includes Context section with metadata', () => {
@@ -493,7 +493,7 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('## Context'));
+    expect(content).toContain('## Context');
   });
 
   it('includes Plan section when present', () => {
@@ -506,7 +506,7 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('## Plan'));
+    expect(content).toContain('## Plan');
   });
 
   it('appends groomed content when provided', () => {
@@ -519,7 +519,7 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('groomedContent'));
+    expect(content).toContain('groomedContent');
   });
 
   it('uses ROLE_MAP and BENEFIT_MAP', () => {
@@ -532,8 +532,8 @@ describe('repair-from-original-register story body builder', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('ROLE_MAP'));
-    assert.ok(content.includes('BENEFIT_MAP'));
+    expect(content).toContain('ROLE_MAP');
+    expect(content).toContain('BENEFIT_MAP');
   });
 });
 
@@ -552,7 +552,7 @@ describe('repair-from-original-register file update', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('function updatePerItemFile'));
+    expect(content).toContain('function updatePerItemFile');
   });
 
   it('uses gray-matter to read frontmatter', () => {
@@ -565,7 +565,7 @@ describe('repair-from-original-register file update', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('matter('));
+    expect(content).toContain('matter(');
   });
 
   it('uses yaml to write frontmatter', () => {
@@ -578,7 +578,7 @@ describe('repair-from-original-register file update', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('yaml.stringify'));
+    expect(content).toContain('yaml.stringify');
   });
 
   it('only updates when new description is longer', () => {
@@ -591,7 +591,7 @@ describe('repair-from-original-register file update', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('newDesc.length <= oldDesc.length'));
+    expect(content).toContain('newDesc.length <= oldDesc.length');
   });
 
   it('updates source metadata when previously unspecified', () => {
@@ -604,7 +604,7 @@ describe('repair-from-original-register file update', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes("'Not specified'"));
+    expect(content).toContain("'Not specified'");
   });
 });
 
@@ -623,7 +623,7 @@ describe('repair-from-original-register main function', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('async function main'));
+    expect(content).toContain('async function main');
   });
 
   it('handles --dry-run flag', () => {
@@ -636,7 +636,7 @@ describe('repair-from-original-register main function', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('--dry-run'));
+    expect(content).toContain('--dry-run');
   });
 
   it('checks for register file existence', () => {
@@ -649,7 +649,7 @@ describe('repair-from-original-register main function', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('existsSync(REGISTER_PATH)'));
+    expect(content).toContain('existsSync(REGISTER_PATH)');
   });
 
   it('checks for GITHUB_TOKEN environment variable', () => {
@@ -662,7 +662,7 @@ describe('repair-from-original-register main function', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('process.env.GITHUB_TOKEN'));
+    expect(content).toContain('process.env.GITHUB_TOKEN');
   });
 
   it('filters out completed items', () => {
@@ -675,7 +675,7 @@ describe('repair-from-original-register main function', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes("priority !== 'Completed'"));
+    expect(content).toContain("priority !== 'Completed'");
   });
 
   it('fetches open issues from GitHub', () => {
@@ -688,8 +688,8 @@ describe('repair-from-original-register main function', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('octokit.paginate'));
-    assert.ok(content.includes("state: 'open'"));
+    expect(content).toContain('octokit.paginate');
+    expect(content).toContain("state: 'open'");
   });
 
   it('tracks files updated, issues updated, and no-match counts', () => {
@@ -702,9 +702,9 @@ describe('repair-from-original-register main function', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('totalFilesUpdated'));
-    assert.ok(content.includes('totalIssuesUpdated'));
-    assert.ok(content.includes('totalNoIssue'));
+    expect(content).toContain('totalFilesUpdated');
+    expect(content).toContain('totalIssuesUpdated');
+    expect(content).toContain('totalNoIssue');
   });
 
   it('exits with error code on failures', () => {
@@ -717,6 +717,6 @@ describe('repair-from-original-register main function', () => {
     );
     const content = readFileSync(scriptPath, 'utf8');
 
-    assert.ok(content.includes('process.exit(1)'));
+    expect(content).toContain('process.exit(1)');
   });
 });

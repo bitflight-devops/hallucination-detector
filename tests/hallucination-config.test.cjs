@@ -1,7 +1,5 @@
 'use strict';
 
-const { describe, it, before, after } = require('node:test');
-const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -18,19 +16,19 @@ const {
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
   it('has the expected 6 categories', () => {
-    assert.ok('speculation_language' in DEFAULT_WEIGHTS);
-    assert.ok('causality_language' in DEFAULT_WEIGHTS);
-    assert.ok('pseudo_quantification' in DEFAULT_WEIGHTS);
-    assert.ok('completeness_claim' in DEFAULT_WEIGHTS);
-    assert.ok('fabricated_source' in DEFAULT_WEIGHTS);
-    assert.ok('evaluative_design_claim' in DEFAULT_WEIGHTS);
-    assert.equal(Object.keys(DEFAULT_WEIGHTS).length, 6);
+    expect(DEFAULT_WEIGHTS).toHaveProperty('speculation_language');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('causality_language');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('pseudo_quantification');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('completeness_claim');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('fabricated_source');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('evaluative_design_claim');
+    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(6);
   });
 
   it('values sum to 1.4 (evaluative_design_claim: 0.4 added to base 1.0)', () => {
     // aggregateWeightedScore normalizes by weightSum, so aggregate scores remain in [0, 1].
     const sum = Object.values(DEFAULT_WEIGHTS).reduce((a, b) => a + b, 0);
-    assert.ok(Math.abs(sum - 1.4) < 1e-9, `Expected sum ~1.4, got ${sum}`);
+    expect(Math.abs(sum - 1.4)).toBeLessThan(1e-9);
   });
 });
 
@@ -39,15 +37,15 @@ describe('DEFAULT_WEIGHTS', () => {
 // =============================================================================
 describe('DEFAULT_CONFIG', () => {
   it('has a weights property equal to DEFAULT_WEIGHTS', () => {
-    assert.deepEqual(DEFAULT_CONFIG.weights, DEFAULT_WEIGHTS);
+    expect(DEFAULT_CONFIG.weights).toEqual(DEFAULT_WEIGHTS);
   });
 
   it('has introspect: false', () => {
-    assert.equal(DEFAULT_CONFIG.introspect, false);
+    expect(DEFAULT_CONFIG.introspect).toBe(false);
   });
 
   it('has introspectOutputPath: null', () => {
-    assert.equal(DEFAULT_CONFIG.introspectOutputPath, null);
+    expect(DEFAULT_CONFIG.introspectOutputPath).toBeNull();
   });
 });
 
@@ -58,38 +56,48 @@ describe('loadConfig', () => {
   let tmpDir;
   let originalCwd;
 
-  before(() => {
+  beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-cfg-test-${Date.now()}-`));
     originalCwd = process.cwd();
     process.chdir(tmpDir);
   });
 
-  after(() => {
+  afterEach(() => {
     process.chdir(originalCwd);
     fs.rmSync(tmpDir, { recursive: true });
   });
 
   it('returns default config when no rc file exists', () => {
     const config = loadConfig();
-    assert.deepEqual(config.weights, DEFAULT_WEIGHTS);
-    assert.equal(config.introspect, false);
-    assert.equal(config.introspectOutputPath, null);
+    expect(config.weights).toEqual(DEFAULT_WEIGHTS);
+    expect(config.introspect).toBe(false);
+    expect(config.introspectOutputPath).toBeNull();
   });
 
   it('config is frozen', () => {
     const config = loadConfig();
-    assert.ok(Object.isFrozen(config));
-    assert.ok(Object.isFrozen(config.weights));
+    expect(Object.isFrozen(config)).toBe(true);
+    expect(Object.isFrozen(config.weights)).toBe(true);
   });
 
   it('returns introspect: false by default', () => {
     const config = loadConfig();
-    assert.equal(config.introspect, false);
+    expect(config.introspect).toBe(false);
   });
 
   it('returns introspectOutputPath: null by default', () => {
     const config = loadConfig();
-    assert.equal(config.introspectOutputPath, null);
+    expect(config.introspectOutputPath).toBeNull();
+  });
+
+  it('returns defaults when rc file throws on require (syntax error)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'this is not valid javascript }{{{',
+    );
+    const config = loadConfig();
+    expect(config.weights).toEqual(DEFAULT_WEIGHTS);
+    expect(config.introspect).toBe(false);
   });
 });
 
@@ -100,26 +108,26 @@ describe('loadWeights', () => {
   let tmpDir;
   let originalCwd;
 
-  before(() => {
+  beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-wt-test-${Date.now()}-`));
     originalCwd = process.cwd();
     process.chdir(tmpDir);
   });
 
-  after(() => {
+  afterEach(() => {
     process.chdir(originalCwd);
     fs.rmSync(tmpDir, { recursive: true });
   });
 
   it('returns DEFAULT_WEIGHTS when no rc file exists', () => {
     const weights = loadWeights();
-    assert.deepEqual(weights, DEFAULT_WEIGHTS);
+    expect(weights).toEqual(DEFAULT_WEIGHTS);
   });
 
   it('returns an object with the same keys as DEFAULT_WEIGHTS', () => {
     const weights = loadWeights();
     const expectedKeys = Object.keys(DEFAULT_WEIGHTS).sort();
     const actualKeys = Object.keys(weights).sort();
-    assert.deepEqual(actualKeys, expectedKeys);
+    expect(actualKeys).toEqual(expectedKeys);
   });
 });

@@ -1,5 +1,5 @@
-const { describe, it } = require('node:test');
-const assert = require('node:assert/strict');
+'use strict';
+
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -27,25 +27,25 @@ describe('speculation language', () => {
   it('flags "I think"', () => {
     const matches = findTriggerMatches('I think the issue is in the config.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('speculation_language'));
+    expect(kinds).toContain('speculation_language');
   });
 
   it('flags "probably"', () => {
     const matches = findTriggerMatches('This is probably a race condition.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('speculation_language'));
+    expect(kinds).toContain('speculation_language');
   });
 
   it('flags "likely"', () => {
     const matches = findTriggerMatches('The error is likely in the database layer.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('speculation_language'));
+    expect(kinds).toContain('speculation_language');
   });
 
   it('does not flag questions', () => {
     const matches = findTriggerMatches('Should I do that now?');
     const specMatches = matches.filter((m) => m.kind === 'speculation_language');
-    assert.equal(specMatches.length, 0);
+    expect(specMatches.length).toBe(0);
   });
 
   it('does not flag code blocks', () => {
@@ -53,7 +53,7 @@ describe('speculation language', () => {
     const specMatches = matches.filter(
       (m) => m.kind === 'speculation_language' && m.evidence === 'probably',
     );
-    assert.equal(specMatches.length, 0);
+    expect(specMatches.length).toBe(0);
   });
 
   it('does not flag inline code', () => {
@@ -61,13 +61,13 @@ describe('speculation language', () => {
     const specMatches = matches.filter(
       (m) => m.kind === 'speculation_language' && m.evidence === 'likely',
     );
-    assert.equal(specMatches.length, 0);
+    expect(specMatches.length).toBe(0);
   });
 
   it('flags epistemic "should be"', () => {
     const matches = findTriggerMatches('It should be working now.');
     const specMatches = matches.filter((m) => m.kind === 'speculation_language');
-    assert.ok(specMatches.length > 0);
+    expect(specMatches.length).toBeGreaterThan(0);
   });
 
   it('does not flag prescriptive "should be" with identifier', () => {
@@ -76,7 +76,29 @@ describe('speculation language', () => {
     const specMatches = matches.filter(
       (m) => m.kind === 'speculation_language' && m.evidence.includes('should be'),
     );
-    assert.equal(specMatches.length, 0);
+    expect(specMatches.length).toBe(0);
+  });
+
+  it('does not flag hypothesis "should be" framing', () => {
+    const matches = findTriggerMatches('H0 should be rejected based on the data.');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBe(0);
+  });
+
+  it('does not flag instructional "should be"', () => {
+    const matches = findTriggerMatches('You should configure the timeout value.');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBe(0);
+  });
+
+  it('flags bare "should be" fallback trigger', () => {
+    // "The answer should be." — no following identifier, no epistemic subject, no hypothesis
+    // framing — exercises the bare fallback branch (lines 278-283 in source)
+    const matches = findTriggerMatches('The answer should be.');
+    const specMatches = matches.filter(
+      (m) => m.kind === 'speculation_language' && m.evidence === 'should be',
+    );
+    expect(specMatches.length).toBeGreaterThan(0);
   });
 });
 
@@ -87,7 +109,7 @@ describe('causality language', () => {
   it('flags "because" without evidence', () => {
     const matches = findTriggerMatches('The test fails because the mock is wrong.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('causality_language'));
+    expect(kinds).toContain('causality_language');
   });
 
   it('suppresses "because" with nearby evidence', () => {
@@ -97,13 +119,13 @@ describe('causality language', () => {
     const causalMatches = matches.filter(
       (m) => m.kind === 'causality_language' && m.evidence === 'because',
     );
-    assert.equal(causalMatches.length, 0);
+    expect(causalMatches.length).toBe(0);
   });
 
   it('flags "caused by" without evidence', () => {
     const matches = findTriggerMatches('The outage was caused by a memory leak.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('causality_language'));
+    expect(kinds).toContain('causality_language');
   });
 
   it('does not flag temporal "since"', () => {
@@ -111,13 +133,21 @@ describe('causality language', () => {
     const sinceMatches = matches.filter(
       (m) => m.kind === 'causality_language' && m.evidence === 'since',
     );
-    assert.equal(sinceMatches.length, 0);
+    expect(sinceMatches.length).toBe(0);
   });
 
   it('flags hedged because', () => {
     const matches = findTriggerMatches('This probably fails because the path is wrong.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('causality_language'));
+    expect(kinds).toContain('causality_language');
+  });
+
+  it('flags hedged-because with evidence "because (hedged)"', () => {
+    const matches = findTriggerMatches('It failed probably because of the timeout.');
+    const hedgedMatches = matches.filter(
+      (m) => m.kind === 'causality_language' && m.evidence === 'because (hedged)',
+    );
+    expect(hedgedMatches.length).toBeGreaterThan(0);
   });
 });
 
@@ -128,7 +158,7 @@ describe('pseudo-quantification', () => {
   it('flags quality scores like 8.5/10', () => {
     const matches = findTriggerMatches('I would rate this code 8.5/10.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('pseudo_quantification'));
+    expect(kinds).toContain('pseudo_quantification');
   });
 
   it('flags bare percentages', () => {
@@ -136,7 +166,7 @@ describe('pseudo-quantification', () => {
     // (the trailing \b in /\b\d{1,3}(?:\.\d+)?\s*%\b/ matches only when a word char follows %)
     const matches = findTriggerMatches('This achieves a 70%reduction in latency.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('pseudo_quantification'));
+    expect(kinds).toContain('pseudo_quantification');
   });
 
   it('does not flag 10/10 as quality score (identity ratio)', () => {
@@ -144,7 +174,7 @@ describe('pseudo-quantification', () => {
     const qualityMatches = matches.filter(
       (m) => m.kind === 'pseudo_quantification' && m.evidence.includes('/10'),
     );
-    assert.equal(qualityMatches.length, 0);
+    expect(qualityMatches.length).toBe(0);
   });
 
   it('does not flag N/10 followed by count noun', () => {
@@ -152,7 +182,13 @@ describe('pseudo-quantification', () => {
     const qualityMatches = matches.filter(
       (m) => m.kind === 'pseudo_quantification' && m.evidence.includes('/10'),
     );
-    assert.equal(qualityMatches.length, 0);
+    expect(qualityMatches.length).toBe(0);
+  });
+
+  it('flags decimal numerator quality score like 7.5/10', () => {
+    const matches = findTriggerMatches('The quality score is 7.5/10.');
+    const qualityMatches = matches.filter((m) => m.kind === 'pseudo_quantification');
+    expect(qualityMatches.length).toBeGreaterThan(0);
   });
 });
 
@@ -163,19 +199,19 @@ describe('completeness claims', () => {
   it('flags "all files checked"', () => {
     const matches = findTriggerMatches('I have verified that all files checked out fine.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('completeness_claim'));
+    expect(kinds).toContain('completeness_claim');
   });
 
   it('flags "fully resolved"', () => {
     const matches = findTriggerMatches('The bug is fully resolved.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('completeness_claim'));
+    expect(kinds).toContain('completeness_claim');
   });
 
   it('flags "everything is fixed"', () => {
     const matches = findTriggerMatches('Everything is fixed now.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('completeness_claim'));
+    expect(kinds).toContain('completeness_claim');
   });
 
   it('suppresses structural completeness near enumerated list', () => {
@@ -185,7 +221,7 @@ describe('completeness claims', () => {
     const structuralMatches = matches.filter(
       (m) => m.kind === 'completeness_claim' && m.evidence.startsWith('All issues have been'),
     );
-    assert.equal(structuralMatches.length, 0);
+    expect(structuralMatches.length).toBe(0);
   });
 });
 
@@ -194,7 +230,7 @@ describe('completeness claims', () => {
 // =============================================================================
 describe('extractTextFromMessageContent', () => {
   it('extracts plain string', () => {
-    assert.equal(extractTextFromMessageContent('hello'), 'hello');
+    expect(extractTextFromMessageContent('hello')).toBe('hello');
   });
 
   it('extracts text blocks from array', () => {
@@ -203,12 +239,17 @@ describe('extractTextFromMessageContent', () => {
       { type: 'tool_use', name: 'Read' },
       { type: 'text', text: 'second' },
     ];
-    assert.equal(extractTextFromMessageContent(content), 'first\nsecond');
+    expect(extractTextFromMessageContent(content)).toBe('first\nsecond');
   });
 
   it('ignores tool_use blocks', () => {
     const content = [{ type: 'tool_use', name: 'Bash', input: {} }];
-    assert.equal(extractTextFromMessageContent(content), '');
+    expect(extractTextFromMessageContent(content)).toBe('');
+  });
+
+  it('extracts .content string field from blocks', () => {
+    const content = [{ type: 'result', content: 'some text' }];
+    expect(extractTextFromMessageContent(content)).toBe('some text');
   });
 });
 
@@ -222,7 +263,7 @@ describe('getLastAssistantText', () => {
       { type: 'assistant', message: { content: [{ type: 'text', text: 'response one' }] } },
       { type: 'assistant', message: { content: [{ type: 'text', text: 'response two' }] } },
     ];
-    assert.equal(getLastAssistantText(entries), 'response two');
+    expect(getLastAssistantText(entries)).toBe('response two');
   });
 
   it('skips sidechain entries', () => {
@@ -234,7 +275,12 @@ describe('getLastAssistantText', () => {
         message: { content: [{ type: 'text', text: 'side' }] },
       },
     ];
-    assert.equal(getLastAssistantText(entries), 'main');
+    expect(getLastAssistantText(entries)).toBe('main');
+  });
+
+  it('returns empty string when no assistant entries exist', () => {
+    const entries = [{ type: 'user', message: { content: 'hi' } }];
+    expect(getLastAssistantText(entries)).toBe('');
   });
 });
 
@@ -245,14 +291,14 @@ describe('parseJsonl', () => {
   it('parses valid JSONL', () => {
     const text = '{"a":1}\n{"b":2}\n';
     const entries = parseJsonl(text);
-    assert.equal(entries.length, 2);
-    assert.deepEqual(entries[0], { a: 1 });
+    expect(entries.length).toBe(2);
+    expect(entries[0]).toEqual({ a: 1 });
   });
 
   it('skips invalid lines', () => {
     const text = '{"a":1}\nnot json\n{"b":2}';
     const entries = parseJsonl(text);
-    assert.equal(entries.length, 2);
+    expect(entries.length).toBe(2);
   });
 });
 
@@ -263,20 +309,20 @@ describe('stripLowSignalRegions', () => {
   it('removes fenced code blocks', () => {
     const text = 'before\n```\nprobably\n```\nafter';
     const stripped = stripLowSignalRegions(text);
-    assert.ok(!stripped.includes('probably'));
-    assert.ok(stripped.includes('before'));
-    assert.ok(stripped.includes('after'));
+    expect(stripped).not.toContain('probably');
+    expect(stripped).toContain('before');
+    expect(stripped).toContain('after');
   });
 
   it('removes inline code', () => {
     const stripped = stripLowSignalRegions('set `likely` to true');
-    assert.ok(!stripped.includes('likely'));
+    expect(stripped).not.toContain('likely');
   });
 
   it('removes blockquotes', () => {
     const stripped = stripLowSignalRegions('> probably wrong\nnot quoted');
-    assert.ok(!stripped.includes('probably'));
-    assert.ok(stripped.includes('not quoted'));
+    expect(stripped).not.toContain('probably');
+    expect(stripped).toContain('not quoted');
   });
 });
 
@@ -289,7 +335,7 @@ describe('integration', () => {
       'I read the file at src/main.rs:42. The output showed error code 1. ' +
       'I ran `cargo test` and observed 3 failures in the auth module.';
     const matches = findTriggerMatches(text);
-    assert.equal(matches.length, 0);
+    expect(matches.length).toBe(0);
   });
 
   it('mixed text flags only speculation, not evidence', () => {
@@ -297,7 +343,7 @@ describe('integration', () => {
       'I observed error code 127 in the logs. ' + 'I think the root cause is a missing binary.';
     const matches = findTriggerMatches(text);
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('speculation_language'));
+    expect(kinds).toContain('speculation_language');
   });
 });
 
@@ -307,43 +353,43 @@ describe('integration', () => {
 describe('splitIntoSentences', () => {
   it('splits on periods', () => {
     const sentences = splitIntoSentences('First sentence. Second sentence. Third sentence.');
-    assert.equal(sentences.length, 3);
-    assert.equal(sentences[0], 'First sentence.');
-    assert.equal(sentences[1], 'Second sentence.');
-    assert.equal(sentences[2], 'Third sentence.');
+    expect(sentences.length).toBe(3);
+    expect(sentences[0]).toBe('First sentence.');
+    expect(sentences[1]).toBe('Second sentence.');
+    expect(sentences[2]).toBe('Third sentence.');
   });
 
   it('splits on exclamation marks', () => {
     const sentences = splitIntoSentences('Watch out! It is dangerous!');
-    assert.equal(sentences.length, 2);
-    assert.equal(sentences[0], 'Watch out!');
+    expect(sentences.length).toBe(2);
+    expect(sentences[0]).toBe('Watch out!');
   });
 
   it('splits on question marks', () => {
     const sentences = splitIntoSentences('Is this correct? Yes it is.');
-    assert.equal(sentences.length, 2);
-    assert.equal(sentences[0], 'Is this correct?');
+    expect(sentences.length).toBe(2);
+    expect(sentences[0]).toBe('Is this correct?');
   });
 
   it('returns single-sentence text as one element', () => {
     const sentences = splitIntoSentences('No terminal punctuation here');
-    assert.equal(sentences.length, 1);
-    assert.equal(sentences[0], 'No terminal punctuation here');
+    expect(sentences.length).toBe(1);
+    expect(sentences[0]).toBe('No terminal punctuation here');
   });
 
   it('filters empty results from blank input', () => {
     const sentences = splitIntoSentences('');
-    assert.equal(sentences.length, 0);
+    expect(sentences.length).toBe(0);
   });
 
   it('handles multiple spaces between sentences', () => {
     const sentences = splitIntoSentences('First.  Second.');
-    assert.equal(sentences.length, 2);
+    expect(sentences.length).toBe(2);
   });
 
   it('handles mixed punctuation', () => {
     const sentences = splitIntoSentences('A. B! C?');
-    assert.equal(sentences.length, 3);
+    expect(sentences.length).toBe(3);
   });
 });
 
@@ -353,38 +399,38 @@ describe('splitIntoSentences', () => {
 describe('scoreSentence', () => {
   it('returns zero scores for clean text', () => {
     const scores = scoreSentence('I read the file and saw no errors.');
-    assert.equal(scores.speculation_language, 0);
-    assert.equal(scores.causality_language, 0);
-    assert.equal(scores.pseudo_quantification, 0);
-    assert.equal(scores.completeness_claim, 0);
-    assert.equal(scores.fabricated_source, 0);
+    expect(scores.speculation_language).toBe(0);
+    expect(scores.causality_language).toBe(0);
+    expect(scores.pseudo_quantification).toBe(0);
+    expect(scores.completeness_claim).toBe(0);
+    expect(scores.fabricated_source).toBe(0);
   });
 
   it('returns 1 for speculation_language on speculative text', () => {
     const scores = scoreSentence('I think this is broken.');
-    assert.equal(scores.speculation_language, 1);
+    expect(scores.speculation_language).toBe(1);
   });
 
   it('returns 1 for causality_language on causal text', () => {
     const scores = scoreSentence('The test breaks because the config is missing.');
-    assert.equal(scores.causality_language, 1);
+    expect(scores.causality_language).toBe(1);
   });
 
   it('scores multiple categories independently', () => {
     const scores = scoreSentence('I think this breaks because of a bug.');
-    assert.equal(scores.speculation_language, 1);
-    assert.equal(scores.causality_language, 1);
+    expect(scores.speculation_language).toBe(1);
+    expect(scores.causality_language).toBe(1);
   });
 
   it('returns 1 for pseudo_quantification on percentage text', () => {
     // The percentage regex requires a word char after %; use '40%reduction' (no space).
     const scores = scoreSentence('This achieves a 40%reduction in latency.');
-    assert.equal(scores.pseudo_quantification, 1);
+    expect(scores.pseudo_quantification).toBe(1);
   });
 
   it('returns 1 for completeness_claim on overclaim text', () => {
     const scores = scoreSentence('Everything is fixed now.');
-    assert.equal(scores.completeness_claim, 1);
+    expect(scores.completeness_claim).toBe(1);
   });
 });
 
@@ -400,7 +446,7 @@ describe('aggregateWeightedScore', () => {
       completeness_claim: 0,
       fabricated_source: 0,
     };
-    assert.equal(aggregateWeightedScore(scores, DEFAULT_WEIGHTS), 0);
+    expect(aggregateWeightedScore(scores, DEFAULT_WEIGHTS)).toBe(0);
   });
 
   it('returns 1 for all-one scores with default weights (normalization preserves ceiling)', () => {
@@ -412,7 +458,7 @@ describe('aggregateWeightedScore', () => {
       fabricated_source: 1,
       evaluative_design_claim: 1,
     };
-    assert.equal(aggregateWeightedScore(scores, DEFAULT_WEIGHTS), 1);
+    expect(aggregateWeightedScore(scores, DEFAULT_WEIGHTS)).toBe(1);
   });
 
   it('returns the triggered category fractional weight for partial scores', () => {
@@ -428,17 +474,14 @@ describe('aggregateWeightedScore', () => {
     // result = 0.25 / 1.4 ≈ 0.17857
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
     const expected = 0.25 / 1.4;
-    assert.ok(
-      Math.abs(result - expected) < 0.001,
-      `Expected ~${expected.toFixed(5)}, got ${result}`,
-    );
+    expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
   it('normalizes custom weights that do not sum to 1', () => {
     const customWeights = { speculation_language: 2, causality_language: 2 };
     const scores = { speculation_language: 1, causality_language: 1 };
     // total = 4, weightSum = 4 → 4/4 = 1
-    assert.equal(aggregateWeightedScore(scores, customWeights), 1);
+    expect(aggregateWeightedScore(scores, customWeights)).toBe(1);
   });
 
   it('handles missing score keys as 0', () => {
@@ -446,15 +489,12 @@ describe('aggregateWeightedScore', () => {
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
     // Only speculation fires: 0.25 / 1.4 ≈ 0.17857 (weightSum includes evaluative_design_claim: 0.4)
     const expected = 0.25 / 1.4;
-    assert.ok(
-      Math.abs(result - expected) < 0.001,
-      `Expected ~${expected.toFixed(5)}, got ${result}`,
-    );
+    expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
   it('returns 0 when weights object is empty', () => {
     const scores = { speculation_language: 1 };
-    assert.equal(aggregateWeightedScore(scores, {}), 0);
+    expect(aggregateWeightedScore(scores, {})).toBe(0);
   });
 
   it('ignores unknown category keys in custom weights', () => {
@@ -462,7 +502,7 @@ describe('aggregateWeightedScore', () => {
     const scores = { speculation_language: 1 };
     // unknown_key should be ignored; only speculation_language contributes
     const result = aggregateWeightedScore(scores, customWeights);
-    assert.equal(result, 1);
+    expect(result).toBe(1);
   });
 
   it('ignores NaN weight values', () => {
@@ -470,7 +510,7 @@ describe('aggregateWeightedScore', () => {
     const scores = { speculation_language: 1, causality_language: 1 };
     // NaN weight for speculation_language is skipped; only causality contributes
     const result = aggregateWeightedScore(scores, customWeights);
-    assert.equal(result, 1);
+    expect(result).toBe(1);
   });
 
   it('ignores negative weight values', () => {
@@ -478,7 +518,7 @@ describe('aggregateWeightedScore', () => {
     const scores = { speculation_language: 1, causality_language: 1 };
     // Negative weight for speculation_language is skipped; only causality contributes
     const result = aggregateWeightedScore(scores, customWeights);
-    assert.equal(result, 1);
+    expect(result).toBe(1);
   });
 });
 
@@ -487,21 +527,21 @@ describe('aggregateWeightedScore', () => {
 // =============================================================================
 describe('getLabelForScore', () => {
   it('returns GROUNDED for score < 0.30', () => {
-    assert.equal(getLabelForScore(0), 'GROUNDED');
-    assert.equal(getLabelForScore(0.1), 'GROUNDED');
-    assert.equal(getLabelForScore(0.29), 'GROUNDED');
+    expect(getLabelForScore(0)).toBe('GROUNDED');
+    expect(getLabelForScore(0.1)).toBe('GROUNDED');
+    expect(getLabelForScore(0.29)).toBe('GROUNDED');
   });
 
   it('returns UNCERTAIN for score between 0.30 and 0.60 inclusive', () => {
-    assert.equal(getLabelForScore(0.3), 'UNCERTAIN');
-    assert.equal(getLabelForScore(0.45), 'UNCERTAIN');
-    assert.equal(getLabelForScore(0.6), 'UNCERTAIN');
+    expect(getLabelForScore(0.3)).toBe('UNCERTAIN');
+    expect(getLabelForScore(0.45)).toBe('UNCERTAIN');
+    expect(getLabelForScore(0.6)).toBe('UNCERTAIN');
   });
 
   it('returns HALLUCINATED for score > 0.60', () => {
-    assert.equal(getLabelForScore(0.61), 'HALLUCINATED');
-    assert.equal(getLabelForScore(0.8), 'HALLUCINATED');
-    assert.equal(getLabelForScore(1), 'HALLUCINATED');
+    expect(getLabelForScore(0.61)).toBe('HALLUCINATED');
+    expect(getLabelForScore(0.8)).toBe('HALLUCINATED');
+    expect(getLabelForScore(1)).toBe('HALLUCINATED');
   });
 });
 
@@ -512,71 +552,71 @@ describe('scoreText', () => {
   it('returns one result per sentence', () => {
     const text = 'First sentence. Second sentence. Third sentence.';
     const results = scoreText(text);
-    assert.equal(results.length, 3);
+    expect(results.length).toBe(3);
   });
 
   it('result objects have required fields', () => {
     const results = scoreText('This is clean.');
-    assert.equal(results.length, 1);
+    expect(results.length).toBe(1);
     const r = results[0];
-    assert.ok('sentence' in r);
-    assert.ok('index' in r);
-    assert.ok('total' in r);
-    assert.ok('scores' in r);
-    assert.ok('aggregateScore' in r);
-    assert.ok('label' in r);
+    expect(r).toHaveProperty('sentence');
+    expect(r).toHaveProperty('index');
+    expect(r).toHaveProperty('total');
+    expect(r).toHaveProperty('scores');
+    expect(r).toHaveProperty('aggregateScore');
+    expect(r).toHaveProperty('label');
   });
 
   it('index starts at 0 and total reflects sentence count', () => {
     const results = scoreText('One. Two. Three.');
-    assert.equal(results[0].index, 0);
-    assert.equal(results[2].index, 2);
-    assert.equal(results[0].total, 3);
+    expect(results[0].index).toBe(0);
+    expect(results[2].index).toBe(2);
+    expect(results[0].total).toBe(3);
   });
 
   it('clean sentence gets GROUNDED label', () => {
     const results = scoreText('I ran the tests and they all passed.');
-    assert.equal(results[0].label, 'GROUNDED');
-    assert.equal(results[0].aggregateScore, 0);
+    expect(results[0].label).toBe('GROUNDED');
+    expect(results[0].aggregateScore).toBe(0);
   });
 
   it('causal sentence gets GROUNDED label', () => {
     // causality_language weight = 0.30, weightSum = 1.4 → score = 0.30/1.4 ≈ 0.214 → GROUNDED
     const results = scoreText('The test breaks because the config is missing.');
     const causalResult = results.find((r) => r.scores.causality_language === 1);
-    assert.ok(causalResult);
-    assert.equal(causalResult.label, 'GROUNDED');
+    expect(causalResult).toBeTruthy();
+    expect(causalResult.label).toBe('GROUNDED');
   });
 
   it('highly flagged sentence gets UNCERTAIN label', () => {
     // speculation (0.25) + causality (0.30) + completeness (0.20) = 0.75 / 1.4 ≈ 0.536 → UNCERTAIN
     const results = scoreText('I think everything is fixed because of the change.');
     const flagged = results.find((r) => r.aggregateScore > 0.3);
-    assert.ok(flagged);
-    assert.equal(flagged.label, 'UNCERTAIN');
+    expect(flagged).toBeTruthy();
+    expect(flagged.label).toBe('UNCERTAIN');
   });
 
   it('accepts custom weights', () => {
     const customWeights = { speculation_language: 1 };
     const results = scoreText('I think it works.', customWeights);
     // 1 * 1 / 1 = 1.0 → HALLUCINATED
-    assert.equal(results[0].aggregateScore, 1);
-    assert.equal(results[0].label, 'HALLUCINATED');
+    expect(results[0].aggregateScore).toBe(1);
+    expect(results[0].label).toBe('HALLUCINATED');
   });
 
   it('handles single-sentence text', () => {
     const results = scoreText('No issues detected');
-    assert.equal(results.length, 1);
-    assert.equal(results[0].index, 0);
-    assert.equal(results[0].total, 1);
+    expect(results.length).toBe(1);
+    expect(results[0].index).toBe(0);
+    expect(results[0].total).toBe(1);
   });
 
   it('each sentence is scored independently', () => {
     const text = 'I think this is broken. The test passed with no errors.';
     const results = scoreText(text);
-    assert.equal(results.length, 2);
-    assert.equal(results[0].scores.speculation_language, 1);
-    assert.equal(results[1].scores.speculation_language, 0);
+    expect(results.length).toBe(2);
+    expect(results[0].scores.speculation_language).toBe(1);
+    expect(results[1].scores.speculation_language).toBe(0);
   });
 });
 
@@ -587,7 +627,7 @@ describe('evaluative_design_claim', () => {
   it('flags "The cleanest fix is to remove the delegation constraint"', () => {
     const matches = findTriggerMatches('The cleanest fix is to remove the delegation constraint.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('evaluative_design_claim'));
+    expect(kinds).toContain('evaluative_design_claim');
   });
 
   it('flags "The simplest solution is to bypass the python-cli-architect agent"', () => {
@@ -595,7 +635,7 @@ describe('evaluative_design_claim', () => {
       'The simplest solution is to bypass the python-cli-architect agent.',
     );
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('evaluative_design_claim'));
+    expect(kinds).toContain('evaluative_design_claim');
   });
 
   it('flags all known tell phrases', () => {
@@ -612,23 +652,23 @@ describe('evaluative_design_claim', () => {
     for (const phrase of tells) {
       const matches = findTriggerMatches(`We should use ${phrase} here.`);
       const kinds = matches.map((m) => m.kind);
-      assert.ok(
+      expect(
         kinds.includes('evaluative_design_claim'),
         `Expected evaluative_design_claim for phrase: "${phrase}"`,
-      );
+      ).toBe(true);
     }
   });
 
   it('does not flag "This code is clean and well-structured" (no exact tell phrase)', () => {
     const matches = findTriggerMatches('This code is clean and well-structured.');
     const edcMatches = matches.filter((m) => m.kind === 'evaluative_design_claim');
-    assert.equal(edcMatches.length, 0);
+    expect(edcMatches.length).toBe(0);
   });
 
   it('does not flag bare "simple" or "clean" without the tell phrase', () => {
     const matches = findTriggerMatches('A simple approach would be to refactor the module.');
     const edcMatches = matches.filter((m) => m.kind === 'evaluative_design_claim');
-    assert.equal(edcMatches.length, 0);
+    expect(edcMatches.length).toBe(0);
   });
 
   it(
@@ -642,21 +682,21 @@ describe('evaluative_design_claim', () => {
         'The cleanest fix requires understanding what the constraint protects.',
       );
       const kinds = matches.map((m) => m.kind);
-      assert.ok(kinds.includes('evaluative_design_claim'));
+      expect(kinds).toContain('evaluative_design_claim');
     },
   );
 
   it('is case-insensitive', () => {
     const matches = findTriggerMatches('THE CLEANEST FIX is to delete this file.');
     const kinds = matches.map((m) => m.kind);
-    assert.ok(kinds.includes('evaluative_design_claim'));
+    expect(kinds).toContain('evaluative_design_claim');
   });
 
   it('does not fire on tell phrases inside code blocks', () => {
     const text = '```\n// the cleanest fix\nreturn null;\n```\nThis is the solution.';
     const matches = findTriggerMatches(text);
     const edcMatches = matches.filter((m) => m.kind === 'evaluative_design_claim');
-    assert.equal(edcMatches.length, 0);
+    expect(edcMatches.length).toBe(0);
   });
 });
 
@@ -674,66 +714,38 @@ describe('block reason self-trigger regression', () => {
     // causes a block. The reason string embeds the evidence. On next invocation
     // the hook reads the reason as the last assistant text and must not re-block.
     const originalMatches = findTriggerMatches('This fails since the config is missing.');
-    assert.ok(
-      originalMatches.some((m) => m.evidence === 'since'),
-      'precondition: "since" must match',
-    );
+    expect(originalMatches.some((m) => m.evidence === 'since')).toBe(true);
 
     const reason = buildBlockReason(originalMatches);
     const secondPassMatches = findTriggerMatches(reason);
-    assert.equal(
-      secondPassMatches.length,
-      0,
-      `Block reason re-triggered on second pass. Matches: ${JSON.stringify(secondPassMatches)}`,
-    );
+    expect(secondPassMatches.length).toBe(0);
   });
 
   it('block reason for "because" match does not re-trigger findTriggerMatches', () => {
     const originalMatches = findTriggerMatches('The test fails because the mock is wrong.');
-    assert.ok(
-      originalMatches.some((m) => m.evidence === 'because'),
-      'precondition: "because" must match',
-    );
+    expect(originalMatches.some((m) => m.evidence === 'because')).toBe(true);
 
     const reason = buildBlockReason(originalMatches);
     const secondPassMatches = findTriggerMatches(reason);
-    assert.equal(
-      secondPassMatches.length,
-      0,
-      `Block reason re-triggered on second pass. Matches: ${JSON.stringify(secondPassMatches)}`,
-    );
+    expect(secondPassMatches.length).toBe(0);
   });
 
   it('block reason for "probably" match does not re-trigger findTriggerMatches', () => {
     const originalMatches = findTriggerMatches('This is probably a race condition.');
-    assert.ok(
-      originalMatches.some((m) => m.evidence === 'probably'),
-      'precondition: "probably" must match',
-    );
+    expect(originalMatches.some((m) => m.evidence === 'probably')).toBe(true);
 
     const reason = buildBlockReason(originalMatches);
     const secondPassMatches = findTriggerMatches(reason);
-    assert.equal(
-      secondPassMatches.length,
-      0,
-      `Block reason re-triggered on second pass. Matches: ${JSON.stringify(secondPassMatches)}`,
-    );
+    expect(secondPassMatches.length).toBe(0);
   });
 
   it('block reason for "I think" match does not re-trigger findTriggerMatches', () => {
     const originalMatches = findTriggerMatches('I think the issue is in the config.');
-    assert.ok(
-      originalMatches.some((m) => m.evidence === 'i think'),
-      'precondition: "i think" must match',
-    );
+    expect(originalMatches.some((m) => m.evidence === 'i think')).toBe(true);
 
     const reason = buildBlockReason(originalMatches);
     const secondPassMatches = findTriggerMatches(reason);
-    assert.equal(
-      secondPassMatches.length,
-      0,
-      `Block reason re-triggered on second pass. Matches: ${JSON.stringify(secondPassMatches)}`,
-    );
+    expect(secondPassMatches.length).toBe(0);
   });
 
   it('block reason for all causality phrases does not re-trigger findTriggerMatches', () => {
@@ -770,11 +782,7 @@ describe('block reason self-trigger regression', () => {
       const syntheticMatch = [{ kind: 'causality_language', evidence: phrase }];
       const reason = buildBlockReason(syntheticMatch);
       const secondPassMatches = findTriggerMatches(reason);
-      assert.equal(
-        secondPassMatches.length,
-        0,
-        `Block reason for causality phrase "${phrase}" re-triggered on second pass. Matches: ${JSON.stringify(secondPassMatches)}`,
-      );
+      expect(secondPassMatches.length).toBe(0);
     }
   });
 
@@ -800,11 +808,7 @@ describe('block reason self-trigger regression', () => {
       const syntheticMatch = [{ kind: 'speculation_language', evidence: phrase }];
       const reason = buildBlockReason(syntheticMatch);
       const secondPassMatches = findTriggerMatches(reason);
-      assert.equal(
-        secondPassMatches.length,
-        0,
-        `Block reason for speculation phrase "${phrase}" re-triggered on second pass. Matches: ${JSON.stringify(secondPassMatches)}`,
-      );
+      expect(secondPassMatches.length).toBe(0);
     }
   });
 
@@ -822,11 +826,7 @@ describe('block reason self-trigger regression', () => {
     ];
     const reason = buildBlockReason(onePerCategory);
     const secondPassMatches = findTriggerMatches(reason);
-    assert.equal(
-      secondPassMatches.length,
-      0,
-      `Full reason string re-triggered on second pass. Matches: ${JSON.stringify(secondPassMatches)}`,
-    );
+    expect(secondPassMatches.length).toBe(0);
   });
 });
 
@@ -835,16 +835,16 @@ describe('block reason self-trigger regression', () => {
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
   it('contains all six detection categories including evaluative_design_claim', () => {
-    assert.ok('speculation_language' in DEFAULT_WEIGHTS);
-    assert.ok('causality_language' in DEFAULT_WEIGHTS);
-    assert.ok('pseudo_quantification' in DEFAULT_WEIGHTS);
-    assert.ok('completeness_claim' in DEFAULT_WEIGHTS);
-    assert.ok('fabricated_source' in DEFAULT_WEIGHTS);
-    assert.ok('evaluative_design_claim' in DEFAULT_WEIGHTS);
+    expect(DEFAULT_WEIGHTS).toHaveProperty('speculation_language');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('causality_language');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('pseudo_quantification');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('completeness_claim');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('fabricated_source');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('evaluative_design_claim');
   });
 
   it('evaluative_design_claim weight is 0.4', () => {
-    assert.equal(DEFAULT_WEIGHTS.evaluative_design_claim, 0.4);
+    expect(DEFAULT_WEIGHTS.evaluative_design_claim).toBe(0.4);
   });
 });
 
@@ -852,87 +852,61 @@ describe('DEFAULT_WEIGHTS', () => {
 // loadWeights
 // =============================================================================
 describe('loadWeights', () => {
+  let tmpDir;
+  let originalCwd;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
   it('returns DEFAULT_WEIGHTS when no config file exists', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
-    const originalCwd = process.cwd();
-    try {
-      process.chdir(tmpDir);
-      const weights = loadWeights();
-      assert.deepEqual(weights, DEFAULT_WEIGHTS);
-    } finally {
-      process.chdir(originalCwd);
-      fs.rmSync(tmpDir, { recursive: true });
-    }
+    const weights = loadWeights();
+    expect(weights).toEqual(DEFAULT_WEIGHTS);
   });
 
   it('merges valid weight overrides from config file', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
-    const originalCwd = process.cwd();
-    try {
-      fs.writeFileSync(
-        path.join(tmpDir, '.hallucination-detectorrc.cjs'),
-        'module.exports = { weights: { speculation_language: 0.5, causality_language: 0.4 } };',
-      );
-      process.chdir(tmpDir);
-      const weights = loadWeights();
-      assert.equal(weights.speculation_language, 0.5);
-      assert.equal(weights.causality_language, 0.4);
-      // Other categories fall back to defaults
-      assert.equal(weights.pseudo_quantification, DEFAULT_WEIGHTS.pseudo_quantification);
-    } finally {
-      process.chdir(originalCwd);
-      fs.rmSync(tmpDir, { recursive: true });
-    }
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { weights: { speculation_language: 0.5, causality_language: 0.4 } };',
+    );
+    const weights = loadWeights();
+    expect(weights.speculation_language).toBe(0.5);
+    expect(weights.causality_language).toBe(0.4);
+    // Other categories fall back to defaults
+    expect(weights.pseudo_quantification).toBe(DEFAULT_WEIGHTS.pseudo_quantification);
   });
 
   it('ignores invalid (non-numeric) weight values, falls back to default', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
-    const originalCwd = process.cwd();
-    try {
-      fs.writeFileSync(
-        path.join(tmpDir, '.hallucination-detectorrc.cjs'),
-        'module.exports = { weights: { speculation_language: "high", causality_language: 0.4 } };',
-      );
-      process.chdir(tmpDir);
-      const weights = loadWeights();
-      // Non-numeric value falls back to default
-      assert.equal(weights.speculation_language, DEFAULT_WEIGHTS.speculation_language);
-      assert.equal(weights.causality_language, 0.4);
-    } finally {
-      process.chdir(originalCwd);
-      fs.rmSync(tmpDir, { recursive: true });
-    }
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { weights: { speculation_language: "high", causality_language: 0.4 } };',
+    );
+    const weights = loadWeights();
+    // Non-numeric value falls back to default
+    expect(weights.speculation_language).toBe(DEFAULT_WEIGHTS.speculation_language);
+    expect(weights.causality_language).toBe(0.4);
   });
 
   it('ignores unknown category keys from config', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
-    const originalCwd = process.cwd();
-    try {
-      fs.writeFileSync(
-        path.join(tmpDir, '.hallucination-detectorrc.cjs'),
-        'module.exports = { weights: { unknown_category: 0.99 } };',
-      );
-      process.chdir(tmpDir);
-      const weights = loadWeights();
-      assert.ok(!Object.hasOwn(weights, 'unknown_category'));
-      assert.deepEqual(weights, DEFAULT_WEIGHTS);
-    } finally {
-      process.chdir(originalCwd);
-      fs.rmSync(tmpDir, { recursive: true });
-    }
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { weights: { unknown_category: 0.99 } };',
+    );
+    const weights = loadWeights();
+    expect(Object.hasOwn(weights, 'unknown_category')).toBe(false);
+    expect(weights).toEqual(DEFAULT_WEIGHTS);
   });
 
   it('returns DEFAULT_WEIGHTS when config has no weights property', () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-test-'));
-    const originalCwd = process.cwd();
-    try {
-      fs.writeFileSync(path.join(tmpDir, '.hallucination-detectorrc.cjs'), 'module.exports = {};');
-      process.chdir(tmpDir);
-      const weights = loadWeights();
-      assert.deepEqual(weights, DEFAULT_WEIGHTS);
-    } finally {
-      process.chdir(originalCwd);
-      fs.rmSync(tmpDir, { recursive: true });
-    }
+    fs.writeFileSync(path.join(tmpDir, '.hallucination-detectorrc.cjs'), 'module.exports = {};');
+    const weights = loadWeights();
+    expect(weights).toEqual(DEFAULT_WEIGHTS);
   });
 });
