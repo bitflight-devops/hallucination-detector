@@ -141,6 +141,23 @@ const EVIDENCE_MARKERS = [
 
 const BACKTICK_RE = /`[^`\n]+`/; // inline code — tested against raw (pre-strip) text
 
+// Evaluative design tell phrases — exact multi-word phrases only; near-zero false-positive risk.
+const evaluativeDesignTells =
+  /\b(?:the\s+cleanest\s+fix|the\s+simplest\s+fix|cleanest\s+solution|simplest\s+solution|cleanest\s+approach|simplest\s+approach|the\s+obvious\s+fix|the\s+obvious\s+solution)\b/i;
+
+/**
+ * Determine whether evidence-like tokens or inline code appear near a given index in the text.
+ *
+ * Checks a window centered at `idx` (default ±150 characters) in `text` for any regexes from
+ * `EVIDENCE_MARKERS`. If `rawText` is provided, also checks the same window in `rawText` for
+ * inline code backticks using `BACKTICK_RE`.
+ *
+ * @param {string} text - The normalized/stripped text to scan for evidence markers.
+ * @param {number} idx - Character index around which to search.
+ * @param {string} [rawText] - Optional original unstripped text used to detect inline code.
+ * @param {number} [windowSize=150] - Number of characters to include on each side of `idx`.
+ * @returns {boolean} `true` if any evidence marker or inline code is found within the window, `false` otherwise.
+ */
 function hasEvidenceNearby(text, idx, rawText, windowSize = 150) {
   const start = Math.max(0, idx - windowSize);
   const end = Math.min(text.length, idx + windowSize);
@@ -214,6 +231,12 @@ function hasEnumerationNearby(text, idx) {
   return allMatches !== null && allMatches.length >= 2;
 }
 
+/**
+ * Detects linguistic signals that suggest uncertainty, causal claims, uncited quantification, completeness assertions, or evaluative-design statements in the provided text.
+ *
+ * @param {string} text - The text to scan for trigger patterns (typically an assistant message).
+ * @returns {Array<{kind: string, evidence: string}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, or `evaluative_design_claim`, and `evidence` is the matched snippet from the text.
+ */
 function findTriggerMatches(text) {
   const matches = [];
   const rawText = normalizeForScan(text);
@@ -455,6 +478,15 @@ function findTriggerMatches(text) {
     matches.push({ kind: 'completeness_claim', evidence: m[0].trim() });
   }
 
+  // 5) Evaluative design claims — exact tell phrases only; no broad terms.
+  // These phrases assert a conclusion ("cleanest", "simplest", "obvious") on a
+  // proposed change without evidence. The regex canary fires on exact multi-word
+  // phrases with near-zero false-positive risk.
+  const edcMatch = evaluativeDesignTells.exec(haystack);
+  if (edcMatch) {
+    matches.push({ kind: 'evaluative_design_claim', evidence: edcMatch[0].trim() });
+  }
+
   return matches;
 }
 
@@ -475,18 +507,17 @@ function splitIntoSentences(text) {
 // DEFAULT_WEIGHTS imported from ./hallucination-config.cjs
 
 /**
- * Score a single sentence across all detection categories.
- * Returns binary scores (0 or 1) per category.
+ * Compute binary detection flags for a sentence across all configured categories.
+ *
+ * Each category present in the analysis configuration is assigned 1 if any trigger
+ * for that category is detected in the sentence, otherwise 0.
+ *
+ * @param {string} sentence - The sentence text to analyze.
+ * @returns {Object<string, number>} An object mapping category names to `0` or `1`, where `1` indicates the category was triggered in the sentence.
  */
 function scoreSentence(sentence) {
   const matches = findTriggerMatches(sentence);
-  const scores = {
-    speculation_language: 0,
-    causality_language: 0,
-    pseudo_quantification: 0,
-    completeness_claim: 0,
-    fabricated_source: 0,
-  };
+  const scores = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
   for (const match of matches) {
     if (Object.hasOwn(scores, match.kind)) {
       scores[match.kind] = 1;
@@ -605,10 +636,53 @@ function saveLoopState(statePath, data) {
   }
 }
 
+/**
+ * Write a value as a single-line JSON string followed by a newline to stdout.
+ * @param {*} obj - The value to serialize with JSON.stringify and emit to process.stdout.
+ */
 function emitJson(obj) {
   process.stdout.write(`${JSON.stringify(obj)}\n`);
 }
 
+/**
+ * Constructs a human-readable block reason from detected trigger matches.
+ *
+ * @param {Array<{kind: string, evidence: string}>} matches - Array of match objects; each must have a `kind` label and an `evidence` snippet used in the reason.
+ * @returns {string} A formatted block reason string suitable for the STOP hook output.
+function buildBlockReason(matches) {
+  const uniqueKinds = [...new Set(matches.map((m) => m.kind))];
+  const evidenceSnippets = matches
+    .slice(0, 6)
+    .map((m) => `- ${m.kind}: \`${m.evidence}\``)
+    .join('\n');
+  return [
+    'Hallucination-detector STOP HOOK blocked this response.',
+    '',
+    'Detected trigger language in your last assistant message:',
+    evidenceSnippets || '- (no snippets available)',
+    '',
+    'Rewrite the response to follow these rules:',
+    '- Only state actions you actually took and what you actually observed.',
+    '- If information is missing, say "I don\'t know yet" / "I don\'t have that information" / "I can check using my tools".',
+    '- Do not assert causality unless you explicitly cite the observed evidence that supports it.',
+    '- Remove speculative hedging (e.g., `probably`, `likely`, `seems`). Replace with verification steps or uncertainty statements.',
+    '- If you need to reference or discuss a flagged phrase in your rewrite, wrap it in backticks (e.g., `probably`, `because`) so the hook does not re-trigger on the explanation.',
+    '- If an evaluative label (`cleanest`, `simplest`, `obvious`) appears on a proposed change: state what the changed component protects when functioning correctly before proposing to change it.',
+    '',
+    `Kinds flagged: ${uniqueKinds.join(', ')}`,
+  ].join('\n');
+}
+
+/**
+ * Run the STOP hook: read stdin JSON, analyze the last main-chain assistant message for hallucination signals, and either emit a block decision or exit without blocking.
+ *
+ * When a transcript path is present, the function extracts the last assistant message, applies configured pattern detection and scoring, and:
+ * - In introspection mode, logs analysis details to a configured or temporary JSONL file and always exits without emitting a block decision.
+ * - When matches are absent, resets per-session block state and exits without blocking.
+ * - When matches are present, updates per-session loop state and, unless session loop limits permit continuing, emits a single JSON line to stdout of the form { decision: "block", reason: "<human-readable reason>" } and then exits.
+ *
+ * Side effects: reads stdin and files, may write per-session state and introspection logs, writes a single JSON line to stdout when blocking, and terminates the process.
+ */
 function main() {
   const input = readStdinJson();
   const transcriptPath = input.transcript_path || '';
@@ -647,12 +721,7 @@ function main() {
     const wouldBlock = matches.length > 0 && nextBlocks <= 2;
     const sentenceScores = scoreText(lastAssistantText, config.weights);
 
-    const categoryCounts = {
-      speculation_language: 0,
-      causality_language: 0,
-      pseudo_quantification: 0,
-      completeness_claim: 0,
-    };
+    const categoryCounts = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
     for (const m of matches) {
       if (Object.hasOwn(categoryCounts, m.kind)) {
         categoryCounts[m.kind] += 1;
@@ -692,28 +761,7 @@ function main() {
 
   saveLoopState(statePath, { blocks: nextBlocks });
 
-  const uniqueKinds = [...new Set(matches.map((m) => m.kind))];
-  const evidenceSnippets = matches
-    .slice(0, 6)
-    .map((m) => `- ${m.kind}: "${m.evidence}"`)
-    .join('\n');
-
-  const reason = [
-    'Hallucination-detector STOP HOOK blocked this response.',
-    '',
-    'Detected trigger language in your last assistant message:',
-    evidenceSnippets || '- (no snippets available)',
-    '',
-    'Rewrite the response to follow these rules:',
-    '- Only state actions you actually took and what you actually observed.',
-    '- If information is missing, say "I don\'t know yet" / "I don\'t have that information" / "I can check using my tools".',
-    '- Do not assert causality unless you explicitly cite the observed evidence that supports it.',
-    '- Remove speculative hedging (e.g., "probably", "likely", "seems"). Replace with verification steps or uncertainty statements.',
-    '- If you need to reference or discuss a flagged phrase in your rewrite, wrap it in backticks (e.g., `probably`, `because`) so the hook does not re-trigger on the explanation.',
-    '',
-    `Kinds flagged: ${uniqueKinds.join(', ')}`,
-  ].join('\n');
-
+  const reason = buildBlockReason(matches);
   emitJson({ decision: 'block', reason });
   process.exit(0);
 }
@@ -725,6 +773,7 @@ if (require.main === module) {
 
 module.exports = {
   findTriggerMatches,
+  buildBlockReason,
   normalizeForScan,
   stripLowSignalRegions,
   extractTextFromMessageContent,
