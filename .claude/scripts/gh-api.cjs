@@ -458,6 +458,88 @@ async function issueCommentSearch(octokit, numberStr) {
 }
 
 /**
+ * Merge a pull request, or enable auto-merge if it cannot be merged immediately.
+ *
+ * Flags:
+ *   --method squash|merge|rebase  Merge method (default: squash)
+ *   --auto                        Enable auto-merge via GraphQL if direct merge is blocked
+ *
+ * @param {import('octokit').Octokit} octokit
+ * @param {string} prStr - PR number as a string from argv.
+ */
+async function prMerge(octokit, prStr) {
+  const pull_number = parseIntArg(prStr, 'PR number');
+  const method = getArg('--method') ?? 'squash';
+  const autoFlag = args.includes('--auto');
+
+  const validMethods = ['squash', 'merge', 'rebase'];
+  if (!validMethods.includes(method)) {
+    console.error(`ERROR: --method must be one of: ${validMethods.join(', ')}`);
+    process.exit(1);
+  }
+
+  if (autoFlag) {
+    // Auto-merge requires the PR node ID — fetch it first.
+    const { data: pr } = await octokit.rest.pulls.get({
+      owner: OWNER,
+      repo: REPO,
+      pull_number,
+    });
+
+    const mergeMethodGql = method.toUpperCase();
+
+    await octokit.graphql(
+      `mutation EnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+        enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }) {
+          pullRequest {
+            number
+            autoMergeRequest {
+              mergeMethod
+              enabledAt
+            }
+          }
+        }
+      }`,
+      { pullRequestId: pr.node_id, mergeMethod: mergeMethodGql },
+    );
+
+    console.log(
+      JSON.stringify(
+        {
+          number: pull_number,
+          auto_merge: true,
+          merge_method: method,
+          html_url: pr.html_url,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  // Direct merge via REST.
+  const { data } = await octokit.rest.pulls.merge({
+    owner: OWNER,
+    repo: REPO,
+    pull_number,
+    merge_method: method,
+  });
+
+  console.log(
+    JSON.stringify(
+      {
+        merged: data.merged,
+        message: data.message,
+        sha: data.sha,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+/**
  * List open pull requests.
  * @param {import('octokit').Octokit} octokit
  */
@@ -1098,6 +1180,7 @@ async function main() {
         '  issue comment react <comment-id> --reaction <+1|-1|laugh|confused|heart|hooray|rocket|eyes>\n' +
         '  pr list\n' +
         '  pr create --title "..." [--base main] [--body "..."]\n' +
+        '  pr merge <number> [--method squash|merge|rebase] [--auto]\n' +
         '  label list\n' +
         '  label create --name "..." --color "rrggbb" [--description "..."]\n' +
         '  review list <pr-number>\n' +
@@ -1177,6 +1260,13 @@ async function main() {
       await prList(octokit);
     } else if (action === 'create') {
       await prCreate(octokit);
+    } else if (action === 'merge') {
+      const [prStr] = rest;
+      if (!prStr) {
+        console.error('ERROR: pr merge requires a PR number');
+        process.exit(1);
+      }
+      await prMerge(octokit, prStr);
     } else {
       console.error(`ERROR: unknown pr action '${action}'`);
       process.exit(1);
