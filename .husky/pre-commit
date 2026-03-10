@@ -1,3 +1,1 @@
-npx biome check --staged --no-errors-on-unmatched
-npx prettier --write --ignore-unknown $(git diff --cached --name-only --diff-filter=ACMR)
-git add $(git diff --cached --name-only --diff-filter=ACMR)
+npx lint-staged
