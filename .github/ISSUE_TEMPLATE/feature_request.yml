@@ -1,7 +1,7 @@
 name: Feature Request
 description: Propose a new feature that follows safe rollout practices (feature-flagged, default-off, contract-compatible).
-title: "[Feature]: "
-labels: ["enhancement"]
+title: '[Feature]: '
+labels: ['enhancement']
 body:
   - type: markdown
     attributes:
