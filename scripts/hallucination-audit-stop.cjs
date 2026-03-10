@@ -483,8 +483,13 @@ function findTriggerMatches(text) {
   // These phrases assert a conclusion ("cleanest", "simplest", "obvious") on a
   // proposed change without evidence. The regex canary fires on exact multi-word
   // phrases with near-zero false-positive risk.
-  // matchAll() requires the `g` flag on EVALUATIVE_DESIGN_TELLS (set at definition site).
-  for (const edcMatch of haystack.matchAll(EVALUATIVE_DESIGN_TELLS)) {
+  // Ensure we always pass a global regex into matchAll(), even if the base
+  // EVALUATIVE_DESIGN_TELLS definition is missing the `g` flag.
+  const edcFlags = EVALUATIVE_DESIGN_TELLS.flags.includes('g')
+    ? EVALUATIVE_DESIGN_TELLS.flags
+    : `${EVALUATIVE_DESIGN_TELLS.flags}g`;
+  const edcGlobal = new RegExp(EVALUATIVE_DESIGN_TELLS.source, edcFlags);
+  for (const edcMatch of haystack.matchAll(edcGlobal)) {
     if (isIndexWithinQuestion(haystack, edcMatch.index)) continue;
     matches.push({ kind: 'evaluative_design_claim', evidence: edcMatch[0].trim() });
   }
