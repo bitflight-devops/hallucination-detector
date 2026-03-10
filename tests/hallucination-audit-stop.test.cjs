@@ -101,6 +101,39 @@ describe('speculation language', () => {
     expect(specMatches.length).toBeGreaterThan(0);
   });
 
+  it('does not flag relative-clause "that should be" as epistemic (false positive regression)', () => {
+    // "that" here is a relative pronoun introducing a subordinate clause, not an epistemic subject.
+    // Previously EPISTEMIC_SUBJECT_SHOULD fired on e.g. "changes that should be reflected in the docs".
+    const falsePositiveCases = [
+      'The changes that should be reflected in the documentation.',
+      'Files that should be committed.',
+      'The behavior that should be documented.',
+      'This file requires changes that should be reflected in the documentation.',
+    ];
+    for (const text of falsePositiveCases) {
+      const matches = findTriggerMatches(text);
+      const epistemicMatches = matches.filter(
+        (m) => m.kind === 'speculation_language' && m.evidence === 'should be (epistemic)',
+      );
+      expect(epistemicMatches, `false positive on: ${text}`).toHaveLength(0);
+    }
+  });
+
+  it('still flags sentence-initial demonstrative "that should be" as epistemic', () => {
+    // "That should be resolved." — 'that' is a demonstrative pronoun (sentence subject), not relative.
+    const genuineCases = [
+      'That should be fixed already.',
+      'I fixed the bug. That should be resolved now.',
+    ];
+    for (const text of genuineCases) {
+      const matches = findTriggerMatches(text);
+      const epistemicMatches = matches.filter(
+        (m) => m.kind === 'speculation_language' && m.evidence === 'should be (epistemic)',
+      );
+      expect(epistemicMatches, `missed genuine epistemic: ${text}`).toHaveLength(1);
+    }
+  });
+
   it('flags "may" in speculative context', () => {
     const matches = findTriggerMatches('This may cause an issue.');
     const specMatches = matches.filter(

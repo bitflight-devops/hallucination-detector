@@ -21,6 +21,10 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { loadConfig, loadWeights, DEFAULT_WEIGHTS } = require('./hallucination-config.cjs');
+const {
+  validateClaimStructure,
+  CLAIM_LABEL_ALTERNATION,
+} = require('./hallucination-claim-structure.cjs');
 
 function readStdinJson() {
   try {
@@ -220,15 +224,16 @@ function isQualityScore(text, matchStr, matchIndex) {
   return true;
 }
 
+// Module-level list-item pattern used by hasEnumerationNearby.
+// Global flag required for String.prototype.match to return all matches.
+const LIST_ITEM_RE = /^\s*(?:\d+[.)]\s|\*\s|-\s)/gm;
+
 // Change 5: hasEnumerationNearby — suppresses structural completeness flags when
 // the preceding context contains a numbered/bulleted list (2+ items).
 function hasEnumerationNearby(text, idx) {
   const start = Math.max(0, idx - 200);
   const preceding = text.slice(start, idx);
-  const listItemRe = /^\s*(?:\d+[.)]\s|\*\s|-\s)/m;
-  const globalListItemRe = /^\s*(?:\d+[.)]\s|\*\s|-\s)/gm;
-  if (!listItemRe.test(preceding)) return false;
-  const allMatches = preceding.match(globalListItemRe);
+  const allMatches = preceding.match(LIST_ITEM_RE);
   return allMatches !== null && allMatches.length >= 2;
 }
 
@@ -292,10 +297,14 @@ function findTriggerMatches(text) {
     const INSTRUCTIONAL_SHOULD =
       /\byou\s+should\s+(?:set|configure|change|update|use|add|remove|ensure|verify|check)\b/i;
     // Flag: epistemic ("it/this/that should be working/fixed/done")
-    const EPISTEMIC_SUBJECT_SHOULD = /\b(?:it|this|that|everything|things?)\s+should\s+be\b/i;
+    // 'that' is split out: as a relative pronoun it follows a noun antecedent ("changes that
+    // should be reflected"), producing false positives. Only treat 'that should be' as epistemic
+    // when 'that' is sentence-initial (demonstrative pronoun: "That should be resolved.").
+    const EPISTEMIC_SUBJECT_SHOULD = /\b(?:it|this|everything|things?)\s+should\s+be\b/i;
+    const EPISTEMIC_THAT_SENTENCE_START = /(?:^|[.!?;]\s+)that\s+should\s+be\b/i;
 
     // Epistemic check runs first — it is the most specific/dangerous signal.
-    if (EPISTEMIC_SUBJECT_SHOULD.test(haystack)) {
+    if (EPISTEMIC_SUBJECT_SHOULD.test(haystack) || EPISTEMIC_THAT_SENTENCE_START.test(haystack)) {
       matches.push({ kind: 'speculation_language', evidence: 'should be (epistemic)' });
     } else if (HYPOTHESIS_SHOULD.test(haystack)) {
       // suppressed — hypothesis framing
@@ -661,6 +670,115 @@ function emitJson(obj) {
 }
 
 /**
+ * Strip labeled claim lines (lines containing [LABEL][cN]) from text before
+ * running trigger scans. This prevents labeled/typed claims from double-firing
+ * the existing speculation and causality detectors.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+// Built from CLAIM_LABEL_ALTERNATION so adding a new label requires one edit.
+const LABELED_CLAIM_LINE_RE = new RegExp(
+  `^\\s*-?\\s*(?:\\[(?:${CLAIM_LABEL_ALTERNATION})\\])+\\[c\\d+\\].*`,
+);
+const METADATA_LINE_RE = /^\s+(?:Evidence|Basis|Missing|Contradicted by):\s*/i;
+
+function stripLabeledClaimLines(text) {
+  return text
+    .split('\n')
+    .filter((line) => !LABELED_CLAIM_LINE_RE.test(line) && !METADATA_LINE_RE.test(line))
+    .join('\n');
+}
+
+const STRUCTURED_BLOCK_FORMAT = `
+ANSWER
+- Direct response to the task.
+
+VERIFIED
+- [VERIFIED][c1] <atomic grounded claim>
+  Evidence: <file path, line, log, test, doc, tool output, or user-provided fact>
+
+INFERRED
+- [INFERRED][c2] <atomic working theory>
+  Basis: <why this is inferred>
+
+UNKNOWN
+- [UNKNOWN][c3] <atomic unresolved point>
+  Missing: <what evidence is absent>
+
+SPECULATION
+- [SPECULATION][c4] <atomic low-evidence possibility>
+  Basis: <why it is being considered>
+
+CORRELATED
+- [CORRELATED][c5] <atomic association only>
+  Evidence: <co-occurrence or observed linkage>
+
+CAUSAL
+- [CAUSAL][c6] <atomic causal claim>
+  Evidence: <experiment, mechanism, controlled comparison, or authoritative source>
+
+REJECTED
+- [REJECTED][c7] <atomic prior claim now contradicted>
+  Contradicted by: <evidence>
+
+NEXT VERIFICATION
+- <smallest check to upgrade INFERRED, SPECULATION, or CORRELATED>
+
+MEMORY WRITE
+- Allowed: <claim IDs from VERIFIED and CAUSAL only>
+- Blocked: <all other claim IDs>`;
+
+const BLOCK_HEADER = 'Hallucination-detector STOP HOOK blocked this response.';
+
+/**
+ * Apply the loop guard and emit a block decision if the limit has not been reached.
+ * Always calls process.exit(0).
+ *
+ * @param {string} sessionId
+ * @param {boolean} stopHookActive
+ * @param {string} reason
+ */
+function blockAndExit(sessionId, stopHookActive, reason) {
+  const { statePath, data } = loadLoopState(sessionId);
+  const nextBlocks = Number(data.blocks || 0) + 1;
+  saveLoopState(statePath, { blocks: nextBlocks });
+  if (nextBlocks > 2 && stopHookActive) {
+    process.exit(0);
+  }
+  emitJson({ decision: 'block', reason });
+  process.exit(0);
+}
+
+/**
+ * Build a block reason for a structured response with validation errors.
+ *
+ * @param {Array<{code: string, claimId?: string, label?: string, message: string}>} errors
+ * @returns {string}
+ */
+function buildStructuralBlockReason(errors) {
+  const errorLines = errors
+    .slice(0, 10)
+    .map((e) => {
+      const prefix = e.claimId
+        ? `[${e.code}] ${e.claimId}${e.label ? ` [${e.label}]` : ''}`
+        : `[${e.code}]`;
+      return `- ${prefix}: ${e.message}`;
+    })
+    .join('\n');
+
+  return [
+    BLOCK_HEADER,
+    '',
+    'Structured claim validation failed:',
+    errorLines || '- (no error details available)',
+    '',
+    'Rewrite using the required structured format:',
+    STRUCTURED_BLOCK_FORMAT,
+  ].join('\n');
+}
+
+/**
  * Constructs a human-readable block reason from detected trigger matches.
  *
  * @param {Array<{kind: string, evidence: string}>} matches - Array of match objects; each must have a `kind` label and an `evidence` snippet used in the reason.
@@ -673,7 +791,7 @@ function buildBlockReason(matches) {
     .map((m) => `- ${m.kind}: \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``)
     .join('\n');
   return [
-    'Hallucination-detector STOP HOOK blocked this response.',
+    BLOCK_HEADER,
     '',
     'Detected trigger language in your last assistant message:',
     evidenceSnippets || '- (no snippets available)',
@@ -722,6 +840,31 @@ function main() {
   }
 
   const config = loadConfig();
+
+  // Structure-aware detection: validate labeled claim structure first.
+  const structureResult = validateClaimStructure(lastAssistantText);
+
+  if (structureResult.structured) {
+    if (!structureResult.valid) {
+      // Block on structural validation failure — loop state still applies.
+      blockAndExit(sessionId, stopHookActive, buildStructuralBlockReason(structureResult.errors));
+    }
+
+    // Structured + valid: run trigger audit on text with labeled claim lines stripped
+    // so acknowledged typed claims don't re-fire speculation/causality detectors.
+    const strippedText = stripLabeledClaimLines(lastAssistantText);
+    const matches = findTriggerMatches(strippedText);
+
+    if (matches.length === 0) {
+      const { statePath } = loadLoopState(sessionId);
+      saveLoopState(statePath, { blocks: 0 });
+      process.exit(0);
+    }
+
+    blockAndExit(sessionId, stopHookActive, buildBlockReason(matches));
+  }
+
+  // Unstructured response: run existing trigger audit unchanged.
   const matches = findTriggerMatches(lastAssistantText);
 
   if (config.introspect) {
@@ -766,21 +909,8 @@ function main() {
     process.exit(0);
   }
 
-  const { statePath, data } = loadLoopState(sessionId);
-  const blocks = Number(data.blocks || 0);
-  const nextBlocks = blocks + 1;
-
   // Avoid infinite loops: after 2 blocks in the same session, allow stop.
-  if (nextBlocks > 2 && stopHookActive) {
-    saveLoopState(statePath, { blocks: nextBlocks });
-    process.exit(0);
-  }
-
-  saveLoopState(statePath, { blocks: nextBlocks });
-
-  const reason = buildBlockReason(matches);
-  emitJson({ decision: 'block', reason });
-  process.exit(0);
+  blockAndExit(sessionId, stopHookActive, buildBlockReason(matches));
 }
 
 // Export internals for testing; run main() only when executed directly.
@@ -812,4 +942,7 @@ module.exports = {
   // New introspection exports
   appendIntrospectionLog,
   hashText,
+  // Structure-aware detection exports
+  buildStructuralBlockReason,
+  stripLabeledClaimLines,
 };
