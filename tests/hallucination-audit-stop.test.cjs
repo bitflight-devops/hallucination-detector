@@ -404,6 +404,7 @@ describe('scoreSentence', () => {
     expect(scores.pseudo_quantification).toBe(0);
     expect(scores.completeness_claim).toBe(0);
     expect(scores.fabricated_source).toBe(0);
+    expect(scores.evaluative_design_claim).toBe(0);
   });
 
   it('returns 1 for speculation_language on speculative text', () => {
