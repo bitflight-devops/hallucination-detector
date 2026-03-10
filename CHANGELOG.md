@@ -1,3 +1,9 @@
+## [1.10.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.9.0...v1.10.0) (2026-03-10)
+
+### Features
+
+- **detection:** add structured claim annotation and persistence gating ([bc20244](https://github.com/bitflight-devops/hallucination-detector/commit/bc20244a89bce78d84a4be1e5e438400d9a9fcc2))
+
 ## [1.9.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.8.0...v1.9.0) (2026-03-10)
 
 ### Features
