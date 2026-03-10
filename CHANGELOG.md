@@ -1,3 +1,18 @@
+## [1.7.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.6.0...v1.7.0) (2026-03-10)
+
+### Features
+
+- **scripts:** add pr merge command to gh-api.cjs ([#34](https://github.com/bitflight-devops/hallucination-detector/issues/34)) ([95e3aa8](https://github.com/bitflight-devops/hallucination-detector/commit/95e3aa80076fe04a5ba2c3a745133cec6c73ba88))
+- **scripts:** add pr view, table formatting, eliminate gh CLI dependency ([#35](https://github.com/bitflight-devops/hallucination-detector/issues/35)) ([f8d137a](https://github.com/bitflight-devops/hallucination-detector/commit/f8d137afb9d213e944343d2bb4efcf56f9a8d057))
+- **scripts:** add run wait and fix pr merge --auto ([#36](https://github.com/bitflight-devops/hallucination-detector/issues/36)) ([c16ec7e](https://github.com/bitflight-devops/hallucination-detector/commit/c16ec7e405c61eda40f289a1e9e9486aa73c777d))
+
+### Bug Fixes
+
+- **stop-hook:** fix EVALUATIVE_DESIGN_TELLS comment and add evidence normalization tests ([#32](https://github.com/bitflight-devops/hallucination-detector/issues/32)) ([9b569af](https://github.com/bitflight-devops/hallucination-detector/commit/9b569af92fc1c944c77f9826b4f378d4d7669a4d))
+- **stop-hook:** guard matchAll g-flag and add evaluative-design regression tests ([#33](https://github.com/bitflight-devops/hallucination-detector/issues/33)) ([6afba26](https://github.com/bitflight-devops/hallucination-detector/commit/6afba26347adfdab0b64a8dae07d35c5cc3ac856))
+- **stop-hook:** normalize evidence whitespace and iterate all evaluative-design matches ([#31](https://github.com/bitflight-devops/hallucination-detector/issues/31)) ([3226b3e](https://github.com/bitflight-devops/hallucination-detector/commit/3226b3eb082a150de5b83df44e031c88e5100d76))
+- **stop-hook:** prevent self-trigger loop and add evaluative design claim detection ([#29](https://github.com/bitflight-devops/hallucination-detector/issues/29)) ([c0c6175](https://github.com/bitflight-devops/hallucination-detector/commit/c0c6175ff5d5110dd4f639411a2736e16f059c21))
+
 ## [1.6.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.5.0...v1.6.0) (2026-03-05)
 
 ### Features
