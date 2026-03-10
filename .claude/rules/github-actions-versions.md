@@ -1,3 +1,9 @@
+---
+paths:
+  - ".github/workflows/*.yml"
+  - ".github/workflows/*.yaml"
+---
+
 # GitHub Actions Version Verification
 
 Before writing or editing any `uses:` line in a workflow file, verify the current major version of the action.
