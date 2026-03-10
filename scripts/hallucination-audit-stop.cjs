@@ -649,6 +649,7 @@ function emitJson(obj) {
  *
  * @param {Array<{kind: string, evidence: string}>} matches - Array of match objects; each must have a `kind` label and an `evidence` snippet used in the reason.
  * @returns {string} A formatted block reason string suitable for the STOP hook output.
+ */
 function buildBlockReason(matches) {
   const uniqueKinds = [...new Set(matches.map((m) => m.kind))];
   const evidenceSnippets = matches

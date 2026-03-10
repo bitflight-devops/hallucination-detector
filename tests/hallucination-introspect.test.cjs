@@ -253,6 +253,8 @@ describe('cmdSummary', () => {
           causality_language: 1,
           pseudo_quantification: 0,
           completeness_claim: 0,
+          fabricated_source: 0,
+          evaluative_design_claim: 0,
         },
       },
       {
@@ -265,6 +267,8 @@ describe('cmdSummary', () => {
           causality_language: 0,
           pseudo_quantification: 0,
           completeness_claim: 0,
+          fabricated_source: 0,
+          evaluative_design_claim: 0,
         },
       },
       {
@@ -277,6 +281,8 @@ describe('cmdSummary', () => {
           causality_language: 0,
           pseudo_quantification: 1,
           completeness_claim: 0,
+          fabricated_source: 0,
+          evaluative_design_claim: 0,
         },
       },
     ];
@@ -426,6 +432,8 @@ describe('cmdAnnotate', () => {
         causality_language: 0,
         pseudo_quantification: 0,
         completeness_claim: 0,
+        fabricated_source: 0,
+        evaluative_design_claim: 0,
       },
     };
     appendJsonlEntry(tmpFile, detection);
@@ -471,6 +479,8 @@ describe('cmdAnnotate', () => {
         causality_language: 0,
         pseudo_quantification: 0,
         completeness_claim: 0,
+        fabricated_source: 0,
+        evaluative_design_claim: 0,
       },
     };
     appendJsonlEntry(tmpFile, detection);

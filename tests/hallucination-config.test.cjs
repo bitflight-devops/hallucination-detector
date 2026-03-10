@@ -17,18 +17,20 @@ const {
 // DEFAULT_WEIGHTS
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
-  it('has the expected 5 categories', () => {
+  it('has the expected 6 categories', () => {
     assert.ok('speculation_language' in DEFAULT_WEIGHTS);
     assert.ok('causality_language' in DEFAULT_WEIGHTS);
     assert.ok('pseudo_quantification' in DEFAULT_WEIGHTS);
     assert.ok('completeness_claim' in DEFAULT_WEIGHTS);
     assert.ok('fabricated_source' in DEFAULT_WEIGHTS);
-    assert.equal(Object.keys(DEFAULT_WEIGHTS).length, 5);
+    assert.ok('evaluative_design_claim' in DEFAULT_WEIGHTS);
+    assert.equal(Object.keys(DEFAULT_WEIGHTS).length, 6);
   });
 
-  it('values sum to 1.0', () => {
+  it('values sum to 1.4 (evaluative_design_claim: 0.4 added to base 1.0)', () => {
+    // aggregateWeightedScore normalizes by weightSum, so aggregate scores remain in [0, 1].
     const sum = Object.values(DEFAULT_WEIGHTS).reduce((a, b) => a + b, 0);
-    assert.ok(Math.abs(sum - 1.0) < 1e-9, `Expected sum ~1.0, got ${sum}`);
+    assert.ok(Math.abs(sum - 1.4) < 1e-9, `Expected sum ~1.4, got ${sum}`);
   });
 });
 
