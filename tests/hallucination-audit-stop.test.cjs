@@ -699,6 +699,18 @@ describe('evaluative_design_claim', () => {
     const edcMatches = matches.filter((m) => m.kind === 'evaluative_design_claim');
     expect(edcMatches.length).toBe(0);
   });
+
+  it('detects multiple evaluative_design_claim occurrences in one text', () => {
+    const matches = findTriggerMatches('The cleanest fix is X. The simplest approach is Y.');
+    const edcMatches = matches.filter((m) => m.kind === 'evaluative_design_claim');
+    expect(edcMatches.length).toBe(2);
+  });
+
+  it('suppresses evaluative_design_claim inside a question', () => {
+    const matches = findTriggerMatches('Is the simplest fix really appropriate?');
+    const edcMatches = matches.filter((m) => m.kind === 'evaluative_design_claim');
+    expect(edcMatches.length).toBe(0);
+  });
 });
 
 // =============================================================================
