@@ -10,14 +10,7 @@
   "homepage": "https://github.com/bitflight-devops/hallucination-detector",
   "repository": "https://github.com/bitflight-devops/hallucination-detector",
   "license": "MIT",
-  "keywords": [
-    "hallucination",
-    "speculation",
-    "causality",
-    "verification",
-    "stop-hook",
-    "quality"
-  ],
+  "keywords": ["hallucination", "speculation", "causality", "verification", "stop-hook", "quality"],
   "commands": "./commands/",
   "hooks": "./hooks/hooks.json"
 }
