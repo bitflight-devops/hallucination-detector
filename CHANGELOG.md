@@ -1,3 +1,9 @@
+## [1.8.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.7.0...v1.8.0) (2026-03-10)
+
+### Features
+
+- **scripts:** add release latest command ([#37](https://github.com/bitflight-devops/hallucination-detector/issues/37)) ([18487a8](https://github.com/bitflight-devops/hallucination-detector/commit/18487a8c848b7325728adab538c8b937a32b6611))
+
 ## [1.7.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.6.0...v1.7.0) (2026-03-10)
 
 ### Features
