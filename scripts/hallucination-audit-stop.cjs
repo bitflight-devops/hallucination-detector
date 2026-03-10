@@ -142,8 +142,9 @@ const EVIDENCE_MARKERS = [
 const BACKTICK_RE = /`[^`\n]+`/; // inline code — tested against raw (pre-strip) text
 
 // Evaluative design tell phrases — exact multi-word phrases only; near-zero false-positive risk.
+// The `g` flag is required so the while-loop in findTriggerMatches() can iterate all occurrences.
 const EVALUATIVE_DESIGN_TELLS =
-  /\b(?:the\s+cleanest\s+fix|the\s+simplest\s+fix|cleanest\s+solution|simplest\s+solution|cleanest\s+approach|simplest\s+approach|the\s+obvious\s+fix|the\s+obvious\s+solution)\b/i;
+  /\b(?:the\s+cleanest\s+fix|the\s+simplest\s+fix|cleanest\s+solution|simplest\s+solution|cleanest\s+approach|simplest\s+approach|the\s+obvious\s+fix|the\s+obvious\s+solution)\b/gi;
 
 /**
  * Determine whether evidence-like tokens or inline code appear near a given index in the text.
@@ -482,8 +483,9 @@ function findTriggerMatches(text) {
   // These phrases assert a conclusion ("cleanest", "simplest", "obvious") on a
   // proposed change without evidence. The regex canary fires on exact multi-word
   // phrases with near-zero false-positive risk.
-  const edcMatch = EVALUATIVE_DESIGN_TELLS.exec(haystack);
-  if (edcMatch) {
+  // matchAll() requires the `g` flag on EVALUATIVE_DESIGN_TELLS (set at definition site).
+  for (const edcMatch of haystack.matchAll(EVALUATIVE_DESIGN_TELLS)) {
+    if (isIndexWithinQuestion(haystack, edcMatch.index)) continue;
     matches.push({ kind: 'evaluative_design_claim', evidence: edcMatch[0].trim() });
   }
 
@@ -654,7 +656,7 @@ function buildBlockReason(matches) {
   const uniqueKinds = [...new Set(matches.map((m) => m.kind))];
   const evidenceSnippets = matches
     .slice(0, 6)
-    .map((m) => `- ${m.kind}: \`${m.evidence}\``)
+    .map((m) => `- ${m.kind}: \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``)
     .join('\n');
   return [
     'Hallucination-detector STOP HOOK blocked this response.',
