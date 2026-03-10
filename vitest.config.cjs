@@ -13,6 +13,8 @@ module.exports = defineConfig({
       reporter: ['text', 'lcov'],
       include: [
         'scripts/hallucination-audit-stop.cjs',
+        'scripts/hallucination-claim-structure.cjs',
+        'scripts/hallucination-memory-gate.cjs',
         'scripts/hallucination-config.cjs',
         'scripts/hallucination-annotate.cjs',
         '.claude/scripts/lib/story-helpers.cjs',

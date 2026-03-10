@@ -1,5 +1,6 @@
 'use strict';
 
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -18,7 +19,45 @@ const {
   scoreText,
   loadWeights,
   DEFAULT_WEIGHTS,
+  stripLabeledClaimLines,
+  buildStructuralBlockReason,
 } = require('../scripts/hallucination-audit-stop.cjs');
+
+const SCRIPT_PATH = path.resolve(__dirname, '../scripts/hallucination-audit-stop.cjs');
+
+/**
+ * Run the stop-hook script as a child process with the given stdin JSON payload.
+ * Returns { stdout, stderr, status }.
+ */
+function runHook(stdinPayload) {
+  const result = spawnSync(process.execPath, [SCRIPT_PATH], {
+    input: JSON.stringify(stdinPayload),
+    encoding: 'utf-8',
+    timeout: 10000,
+  });
+  return {
+    stdout: result.stdout || '',
+    stderr: result.stderr || '',
+    status: result.status,
+  };
+}
+
+/**
+ * Build a temporary transcript file whose last assistant message is the given text.
+ * Returns the file path. Caller is responsible for cleanup.
+ */
+function makeTempTranscript(assistantText) {
+  const tmpFile = path.join(
+    os.tmpdir(),
+    `hd-main-test-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+  );
+  const entry = JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: assistantText }] },
+  });
+  fs.writeFileSync(tmpFile, `${entry}\n`, 'utf-8');
+  return tmpFile;
+}
 
 // =============================================================================
 // Speculation language
@@ -1008,5 +1047,381 @@ describe('loadWeights', () => {
     fs.writeFileSync(path.join(tmpDir, '.hallucination-detectorrc.cjs'), 'module.exports = {};');
     const weights = loadWeights();
     expect(weights).toEqual(DEFAULT_WEIGHTS);
+  });
+});
+
+// =============================================================================
+// stripLabeledClaimLines
+// =============================================================================
+describe('stripLabeledClaimLines', () => {
+  it('strips [VERIFIED][cN] claim lines', () => {
+    const input =
+      'Some intro text.\n- [VERIFIED][c1] The file exists.\n  Evidence: Read tool output\nMore text.';
+    const result = stripLabeledClaimLines(input);
+    expect(result).not.toContain('[VERIFIED][c1]');
+    expect(result).toContain('Some intro text.');
+    expect(result).toContain('More text.');
+  });
+
+  it('strips [INFERRED][cN] claim lines', () => {
+    const input =
+      '- [INFERRED][c2] The bug is in the parser.\n  Basis: Error message points to parse step';
+    const result = stripLabeledClaimLines(input);
+    expect(result).not.toContain('[INFERRED][c2]');
+    expect(result).not.toContain('Basis:');
+  });
+
+  it('strips [UNKNOWN][cN] claim lines and Missing: metadata', () => {
+    const input = '- [UNKNOWN][c3] Whether it is configurable.\n  Missing: No config key found';
+    const result = stripLabeledClaimLines(input);
+    expect(result).not.toContain('[UNKNOWN][c3]');
+    expect(result).not.toContain('Missing:');
+  });
+
+  it('strips [SPECULATION][cN] and [CORRELATED][cN] and [CAUSAL][cN] and [REJECTED][cN]', () => {
+    const labels = ['SPECULATION', 'CORRELATED', 'CAUSAL', 'REJECTED'];
+    for (const label of labels) {
+      const input = `- [${label}][c1] Some claim.\n  Evidence: some evidence`;
+      const result = stripLabeledClaimLines(input);
+      expect(result).not.toContain(`[${label}][c1]`);
+    }
+  });
+
+  it('strips Evidence:, Basis:, Missing:, and Contradicted by: metadata lines', () => {
+    const input = [
+      '- [VERIFIED][c1] Claim text.',
+      '  Evidence: file path at line 10',
+      '- [INFERRED][c2] Inferred claim.',
+      '  Basis: reasoning here',
+      '- [UNKNOWN][c3] Unknown point.',
+      '  Missing: no doc found',
+      '- [REJECTED][c4] Rejected claim.',
+      '  Contradicted by: test output',
+    ].join('\n');
+    const result = stripLabeledClaimLines(input);
+    expect(result).not.toContain('Evidence:');
+    expect(result).not.toContain('Basis:');
+    expect(result).not.toContain('Missing:');
+    expect(result).not.toContain('Contradicted by:');
+  });
+
+  it('preserves non-claim lines', () => {
+    const input =
+      'ANSWER\n- Direct answer here.\n\nVERIFIED\n- [VERIFIED][c1] Claim.\n  Evidence: tool output\n\nNEXT VERIFICATION\n- Run the tests.';
+    const result = stripLabeledClaimLines(input);
+    expect(result).toContain('ANSWER');
+    expect(result).toContain('Direct answer here.');
+    expect(result).toContain('NEXT VERIFICATION');
+    expect(result).toContain('Run the tests.');
+  });
+
+  it('does not strip lines that merely mention a label word without the bracket pattern', () => {
+    const input = 'This is VERIFIED by observation.\nThe INFERRED result is correct.';
+    const result = stripLabeledClaimLines(input);
+    expect(result).toContain('This is VERIFIED by observation.');
+    expect(result).toContain('The INFERRED result is correct.');
+  });
+});
+
+// =============================================================================
+// buildStructuralBlockReason
+// =============================================================================
+describe('buildStructuralBlockReason', () => {
+  it('includes block header in output', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const reason = buildStructuralBlockReason(errors);
+    expect(reason).toContain('Hallucination-detector STOP HOOK blocked this response.');
+  });
+
+  it('formats error with claimId and label', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const reason = buildStructuralBlockReason(errors);
+    expect(reason).toContain('[missing_evidence] c1 [VERIFIED]: VERIFIED claims require Evidence:');
+  });
+
+  it('formats error without claimId', () => {
+    const errors = [
+      {
+        code: 'missing_memory_write_section',
+        message: 'Structured response has labeled claims but no MEMORY WRITE section',
+      },
+    ];
+    const reason = buildStructuralBlockReason(errors);
+    expect(reason).toContain(
+      '[missing_memory_write_section]: Structured response has labeled claims but no MEMORY WRITE section',
+    );
+  });
+
+  it('formats error with claimId but no label', () => {
+    const errors = [
+      { code: 'duplicate_claim_id', claimId: 'c1', message: 'Duplicate claim ID c1' },
+    ];
+    const reason = buildStructuralBlockReason(errors);
+    expect(reason).toContain('[duplicate_claim_id] c1: Duplicate claim ID c1');
+  });
+
+  it('includes "Structured claim validation failed:" header', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const reason = buildStructuralBlockReason(errors);
+    expect(reason).toContain('Structured claim validation failed:');
+  });
+
+  it('includes the structured block format hint (ANSWER section)', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const reason = buildStructuralBlockReason(errors);
+    expect(reason).toContain('ANSWER');
+    expect(reason).toContain('MEMORY WRITE');
+  });
+
+  it('slices to max 10 errors when given more than 10', () => {
+    const errors = Array.from({ length: 15 }, (_, i) => ({
+      code: 'missing_evidence',
+      claimId: `c${i + 1}`,
+      label: 'VERIFIED',
+      message: `VERIFIED claims require Evidence: (${i + 1})`,
+    }));
+    const reason = buildStructuralBlockReason(errors);
+    // slice(0,10) means exactly 10 "- [missing_evidence]" lines appear
+    const errorLineCount = reason
+      .split('\n')
+      .filter((l) => l.startsWith('- [missing_evidence]')).length;
+    expect(errorLineCount).toBe(10);
+  });
+
+  it('uses fallback message when errors array is empty', () => {
+    const reason = buildStructuralBlockReason([]);
+    expect(reason).toContain('(no error details available)');
+  });
+});
+
+// =============================================================================
+// main() — structured + invalid path
+// =============================================================================
+describe('main() structured + invalid', () => {
+  let transcriptPath;
+
+  afterEach(() => {
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+    transcriptPath = undefined;
+  });
+
+  it('blocks when structured response has missing Evidence: on VERIFIED claim', () => {
+    // [VERIFIED][c1] without an Evidence: line is structurally invalid.
+    // No MEMORY WRITE section either → triggers missing_memory_write_section error too.
+    const assistantText = [
+      'ANSWER',
+      '- The file exists.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The file exists at scripts/foo.cjs',
+      '',
+    ].join('\n');
+
+    transcriptPath = makeTempTranscript(assistantText);
+    const { stdout } = runHook({
+      session_id: `test-invalid-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim().length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.decision).toBe('block');
+    expect(parsed.reason).toContain('Structured claim validation failed');
+  });
+
+  it('block reason for invalid structure does not contain unprotected trigger phrases', () => {
+    const assistantText = [
+      'ANSWER',
+      '- Direct response.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] Some claim.',
+      '',
+    ].join('\n');
+
+    transcriptPath = makeTempTranscript(assistantText);
+    const { stdout } = runHook({
+      session_id: `test-invalid-reason-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    const parsed = JSON.parse(stdout.trim());
+    // The block reason itself must not re-trigger the detector (self-trigger guard)
+    const secondPassMatches = findTriggerMatches(parsed.reason);
+    expect(secondPassMatches.length).toBe(0);
+  });
+});
+
+// =============================================================================
+// main() — structured + valid path
+// =============================================================================
+describe('main() structured + valid', () => {
+  let transcriptPath;
+
+  afterEach(() => {
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+    transcriptPath = undefined;
+  });
+
+  it('passes through (no block) when structured response is fully valid and clean', () => {
+    // Minimal valid structured response: one VERIFIED claim with Evidence,
+    // MEMORY WRITE section listing it in Allowed.
+    const assistantText = [
+      'ANSWER',
+      '- The file exists at the expected path.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The file exists at scripts/hallucination-audit-stop.cjs',
+      '  Evidence: Confirmed via Read tool output',
+      '',
+      'NEXT VERIFICATION',
+      '- Run pnpm test to confirm no regressions.',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked: (none)',
+    ].join('\n');
+
+    transcriptPath = makeTempTranscript(assistantText);
+    const { stdout } = runHook({
+      session_id: `test-valid-clean-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    // No block decision emitted — stdout should be empty
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('blocks when structured + valid response has speculation in the ANSWER section (non-claim text)', () => {
+    // The claim lines will be stripped before trigger scan, but "probably" in
+    // the ANSWER section survives stripping and fires speculation_language.
+    const assistantText = [
+      'ANSWER',
+      '- This is probably the correct approach.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The test passed.',
+      '  Evidence: pnpm test output shows 0 failures',
+      '',
+      'NEXT VERIFICATION',
+      '- No further checks needed.',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked: (none)',
+    ].join('\n');
+
+    transcriptPath = makeTempTranscript(assistantText);
+    const { stdout } = runHook({
+      session_id: `test-valid-spec-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim().length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.decision).toBe('block');
+    expect(parsed.reason).toContain('speculation_language');
+  });
+});
+
+// =============================================================================
+// main() — loop guard (blockAndExit stop_hook_active path)
+// =============================================================================
+describe('main() loop guard', () => {
+  let transcriptPath;
+  let stateFilePath;
+
+  afterEach(() => {
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+    if (stateFilePath && fs.existsSync(stateFilePath)) {
+      fs.unlinkSync(stateFilePath);
+    }
+    transcriptPath = undefined;
+    stateFilePath = undefined;
+  });
+
+  it('allows through (no block emitted) when nextBlocks > 2 and stop_hook_active is true', () => {
+    // Seed the loop state file with blocks: 2. The next call will compute
+    // nextBlocks = 3, which satisfies nextBlocks > 2 && stopHookActive → exit(0) without block.
+    const sessionId = `test-loop-guard-${Date.now()}`;
+    stateFilePath = path.join(os.tmpdir(), `claude-hallucination-audit-${sessionId}.json`);
+    fs.writeFileSync(stateFilePath, JSON.stringify({ blocks: 2 }), 'utf-8');
+
+    // Use a message that would normally trigger speculation_language.
+    const assistantText = 'I think this is probably correct.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout } = runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      stop_hook_active: true,
+      hook_event_name: 'Stop',
+    });
+
+    // Loop guard triggered: no block decision emitted.
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('still blocks when nextBlocks <= 2 even with stop_hook_active true', () => {
+    // Seed blocks: 0 — nextBlocks will be 1, which does NOT satisfy the > 2 guard.
+    const sessionId = `test-loop-no-guard-${Date.now()}`;
+    stateFilePath = path.join(os.tmpdir(), `claude-hallucination-audit-${sessionId}.json`);
+    fs.writeFileSync(stateFilePath, JSON.stringify({ blocks: 0 }), 'utf-8');
+
+    const assistantText = 'I think this is probably correct.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout } = runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      stop_hook_active: true,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim().length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.decision).toBe('block');
   });
 });
