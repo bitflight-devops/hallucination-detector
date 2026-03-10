@@ -10,33 +10,34 @@ Before writing or editing any `uses:` line in a workflow file, verify the curren
 
 ## How to check
 
+Use `node .claude/scripts/gh-api.cjs release latest <owner>/<action>` to get the current latest release tag:
+
 ```bash
-# Check the latest release tag for any action
-node .claude/scripts/gh-api.cjs run list  # not applicable — use WebFetch instead
+node .claude/scripts/gh-api.cjs release latest actions/checkout
+# → v6.0.2  (major: v6)
 ```
 
-Use `mcp__Ref__ref_read_url` to fetch the releases page:
-
-```
-https://github.com/<owner>/<action>/releases/latest
-```
-
-Example — before writing `uses: pnpm/action-setup@vN`:
-1. Fetch `https://github.com/pnpm/action-setup/releases/latest`
-2. Read the tag shown (e.g. `v4.1.0` → major is `v4`)
-3. Use the major pin: `pnpm/action-setup@v4`
+Then use the major pin in the workflow: `actions/checkout@v6`
 
 ## Rule
 
 **Never copy a `uses:` version from another workflow file without verifying it.**
-The source file may itself be outdated. Always verify against the action's own releases page.
+The source file may itself be outdated. Always verify the current major before writing any `uses:` line.
 
 ## Actions used in this repo
 
-| Action | Verified major | Releases page |
-|--------|---------------|---------------|
-| `actions/checkout` | `v4` | https://github.com/actions/checkout/releases |
-| `actions/setup-node` | `v4` | https://github.com/actions/setup-node/releases |
-| `pnpm/action-setup` | `v4` | https://github.com/pnpm/action-setup/releases |
+Before using any action, run:
 
-Update this table whenever a new action is added to a workflow.
+```bash
+node .claude/scripts/gh-api.cjs release latest <owner>/<action> --major
+```
+
+Examples:
+
+```bash
+node .claude/scripts/gh-api.cjs release latest actions/checkout --major
+node .claude/scripts/gh-api.cjs release latest actions/setup-node --major
+node .claude/scripts/gh-api.cjs release latest pnpm/action-setup --major
+```
+
+Use the returned major version directly in the `uses:` line. Do not guess. Do not copy from another workflow.
