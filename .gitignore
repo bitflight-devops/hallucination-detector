@@ -10,3 +10,4 @@ dist/
 !.claude/scripts/
 !.claude/CLAUDE.md
 .worktrees/
+coverage/

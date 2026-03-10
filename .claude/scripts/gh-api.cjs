@@ -1321,6 +1321,57 @@ async function runWait(octokit, runStr) {
   process.exit(2);
 }
 
+/**
+ * Get the latest release tag for any public GitHub repository.
+ * @param {import('octokit').Octokit} octokit
+ * @param {string} ownerRepo - Combined "owner/repo" string from argv.
+ */
+async function releaseLatest(octokit, ownerRepo) {
+  const slashIndex = ownerRepo.indexOf('/');
+  if (slashIndex === -1) {
+    console.error(`ERROR: release latest requires <owner>/<repo>, got '${ownerRepo}'`);
+    process.exit(1);
+  }
+  const owner = ownerRepo.slice(0, slashIndex);
+  const repo = ownerRepo.slice(slashIndex + 1);
+
+  let data;
+  try {
+    ({ data } = await octokit.rest.repos.getLatestRelease({ owner, repo }));
+  } catch (err) {
+    if (err.status === 404) {
+      console.error(`No releases found for ${owner}/${repo}`);
+      process.exit(1);
+    }
+    throw err;
+  }
+
+  if (args.includes('--json')) {
+    console.log(
+      JSON.stringify(
+        {
+          tag_name: data.tag_name,
+          name: data.name,
+          published_at: data.published_at,
+          html_url: data.html_url,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (args.includes('--major')) {
+    // Extract leading "vN" or "N" major prefix from tag_name
+    const match = /^(v?\d+)/.exec(data.tag_name);
+    console.log(match ? match[1] : data.tag_name);
+    return;
+  }
+
+  console.log(data.tag_name);
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -1364,7 +1415,8 @@ async function main() {
         '  run rerun <run-id> [--failed-only]\n' +
         '  run logs <run-id>\n' +
         '  run cancel <run-id>\n' +
-        '  run wait <run-id> [--timeout 300] [--interval 10] [--format table|json]',
+        '  run wait <run-id> [--timeout 300] [--interval 10] [--format table|json]\n' +
+        '  release latest <owner>/<repo> [--json] [--major]',
     );
     process.exit(1);
   }
@@ -1587,9 +1639,21 @@ async function main() {
       console.error(`ERROR: unknown run action '${action}'`);
       process.exit(1);
     }
+  } else if (resource === 'release') {
+    if (action === 'latest') {
+      const [ownerRepo] = rest;
+      if (!ownerRepo) {
+        console.error('ERROR: release latest requires <owner>/<repo>');
+        process.exit(1);
+      }
+      await releaseLatest(octokit, ownerRepo);
+    } else {
+      console.error(`ERROR: unknown release action '${action}'`);
+      process.exit(1);
+    }
   } else {
     console.error(
-      `ERROR: unknown resource '${resource}' — expected: issue, pr, label, review, review-comment, checks, run`,
+      `ERROR: unknown resource '${resource}' — expected: issue, pr, label, review, review-comment, checks, run, release`,
     );
     process.exit(1);
   }
