@@ -56,7 +56,6 @@
         "assets": [
           "CHANGELOG.md",
           "package.json",
-          "package-lock.json",
           ".claude-plugin/plugin.json",
           ".cursor-plugin/plugin.json"
         ],
