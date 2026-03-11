@@ -24,7 +24,7 @@ const DEFAULT_WEIGHTS = {
   causality_language: 0.3,
   pseudo_quantification: 0.15,
   completeness_claim: 0.2,
-  fabricated_source: 0.1,
+  // fabricated_source: reserved for future implementation (issue #18)
   evaluative_design_claim: 0.4,
 };
 

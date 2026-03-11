@@ -15,20 +15,21 @@ const {
 // DEFAULT_WEIGHTS
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
-  it('has the expected 6 categories', () => {
+  it('has the expected 5 categories', () => {
     expect(DEFAULT_WEIGHTS).toHaveProperty('speculation_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('causality_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('pseudo_quantification');
     expect(DEFAULT_WEIGHTS).toHaveProperty('completeness_claim');
-    expect(DEFAULT_WEIGHTS).toHaveProperty('fabricated_source');
     expect(DEFAULT_WEIGHTS).toHaveProperty('evaluative_design_claim');
-    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(6);
+    expect(DEFAULT_WEIGHTS).not.toHaveProperty('fabricated_source');
+    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(5);
   });
 
-  it('values sum to 1.4 (evaluative_design_claim: 0.4 added to base 1.0)', () => {
+  it('values sum to 1.3 (evaluative_design_claim: 0.4 added to base 0.9)', () => {
     // aggregateWeightedScore normalizes by weightSum, so aggregate scores remain in [0, 1].
+    // fabricated_source (0.1) removed — reserved for future implementation (issue #18).
     const sum = Object.values(DEFAULT_WEIGHTS).reduce((a, b) => a + b, 0);
-    expect(Math.abs(sum - 1.4)).toBeLessThan(1e-9);
+    expect(Math.abs(sum - 1.3)).toBeLessThan(1e-9);
   });
 });
 

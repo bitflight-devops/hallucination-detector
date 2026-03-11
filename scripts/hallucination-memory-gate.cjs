@@ -13,12 +13,11 @@
 const RETAINABLE_LABELS = new Set(['VERIFIED', 'CAUSAL']);
 
 function computeMemoryGate(claims) {
-  const RETAINABLE = RETAINABLE_LABELS;
   const allowed = [];
   const blocked = [];
 
   for (const claim of claims) {
-    if (RETAINABLE.has(claim.label)) {
+    if (RETAINABLE_LABELS.has(claim.label)) {
       allowed.push(claim.id);
     } else {
       blocked.push(claim.id);

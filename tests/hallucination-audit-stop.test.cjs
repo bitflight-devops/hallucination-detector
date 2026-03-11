@@ -508,7 +508,6 @@ describe('scoreSentence', () => {
     expect(scores.causality_language).toBe(0);
     expect(scores.pseudo_quantification).toBe(0);
     expect(scores.completeness_claim).toBe(0);
-    expect(scores.fabricated_source).toBe(0);
     expect(scores.evaluative_design_claim).toBe(0);
   });
 
@@ -550,7 +549,6 @@ describe('aggregateWeightedScore', () => {
       causality_language: 0,
       pseudo_quantification: 0,
       completeness_claim: 0,
-      fabricated_source: 0,
     };
     expect(aggregateWeightedScore(scores, DEFAULT_WEIGHTS)).toBe(0);
   });
@@ -561,7 +559,6 @@ describe('aggregateWeightedScore', () => {
       causality_language: 1,
       pseudo_quantification: 1,
       completeness_claim: 1,
-      fabricated_source: 1,
       evaluative_design_claim: 1,
     };
     expect(aggregateWeightedScore(scores, DEFAULT_WEIGHTS)).toBe(1);
@@ -573,13 +570,12 @@ describe('aggregateWeightedScore', () => {
       causality_language: 0,
       pseudo_quantification: 0,
       completeness_claim: 0,
-      fabricated_source: 0,
       evaluative_design_claim: 0,
     };
-    // speculation weight = 0.25, weightSum = 1.4 (includes evaluative_design_claim: 0.4)
-    // result = 0.25 / 1.4 ≈ 0.17857
+    // speculation weight = 0.25, weightSum = 1.3 (fabricated_source removed, evaluative_design_claim: 0.4)
+    // result = 0.25 / 1.3 ≈ 0.19231
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    const expected = 0.25 / 1.4;
+    const expected = 0.25 / 1.3;
     expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
@@ -593,8 +589,8 @@ describe('aggregateWeightedScore', () => {
   it('handles missing score keys as 0', () => {
     const scores = { speculation_language: 1 };
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    // Only speculation fires: 0.25 / 1.4 ≈ 0.17857 (weightSum includes evaluative_design_claim: 0.4)
-    const expected = 0.25 / 1.4;
+    // Only speculation fires: 0.25 / 1.3 ≈ 0.19231 (weightSum = 1.3; fabricated_source removed)
+    const expected = 0.25 / 1.3;
     expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
@@ -979,13 +975,13 @@ describe('block reason self-trigger regression', () => {
 // DEFAULT_WEIGHTS
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
-  it('contains all six detection categories including evaluative_design_claim', () => {
+  it('contains all five detection categories including evaluative_design_claim', () => {
     expect(DEFAULT_WEIGHTS).toHaveProperty('speculation_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('causality_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('pseudo_quantification');
     expect(DEFAULT_WEIGHTS).toHaveProperty('completeness_claim');
-    expect(DEFAULT_WEIGHTS).toHaveProperty('fabricated_source');
     expect(DEFAULT_WEIGHTS).toHaveProperty('evaluative_design_claim');
+    expect(DEFAULT_WEIGHTS).not.toHaveProperty('fabricated_source');
   });
 
   it('evaluative_design_claim weight is 0.4', () => {

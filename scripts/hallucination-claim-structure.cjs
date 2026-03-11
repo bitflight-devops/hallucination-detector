@@ -56,6 +56,35 @@ const EVIDENCE_PREFIX_RE =
   /^\s*(?:User|File|Log|Test|Doc|Tool|Transcript|Code|Command|Output|Error|Config|Trace|Repro):/i;
 
 /**
+ * Check evidence content for vagueness and normalization.
+ * Returns an array of error objects (empty when the evidence is acceptable).
+ *
+ * @param {string} evidenceContent - Evidence text with the "Evidence:" prefix already stripped.
+ * @param {string} claimId
+ * @param {string} label
+ * @returns {Array<{code: string, claimId: string, label: string, message: string}>}
+ */
+function checkEvidenceQuality(evidenceContent, claimId, label) {
+  const errors = [];
+  if (VAGUE_EVIDENCE_RE.test(evidenceContent)) {
+    errors.push({
+      code: 'vague_verified_evidence',
+      claimId,
+      label,
+      message: `${label} evidence must cite a concrete source (a recognized prefix such as File:, Log:, Test:, Doc:, Tool:, User:, Transcript:, Code:, Command:, Output:, Error:, Config:, Trace:, Repro:), not "${evidenceContent}"`,
+    });
+  } else if (!EVIDENCE_PREFIX_RE.test(evidenceContent)) {
+    errors.push({
+      code: 'unnormalized_evidence',
+      claimId,
+      label,
+      message: `${label} evidence should use a recognized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:, Code:, Command:, Output:, Error:, Config:, Trace:, Repro:)`,
+    });
+  }
+  return errors;
+}
+
+/**
  * Parse claim lines from a block of text.
  * Returns array of { id, label, text, lineIndex, allLabels } objects.
  *
@@ -302,21 +331,7 @@ function validateClaimStructure(text) {
           });
         } else {
           const evidenceContent = evidenceLine.replace(/^evidence:\s*/i, '').trim();
-          if (VAGUE_EVIDENCE_RE.test(evidenceContent)) {
-            errors.push({
-              code: 'vague_verified_evidence',
-              claimId: claim.id,
-              label: claim.label,
-              message: `${claim.label} evidence must cite a concrete source (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:), not "${evidenceLine.trim()}"`,
-            });
-          } else if (!EVIDENCE_PREFIX_RE.test(evidenceContent)) {
-            errors.push({
-              code: 'unnormalized_evidence',
-              claimId: claim.id,
-              label: claim.label,
-              message: `${claim.label} evidence should use a normalized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:)`,
-            });
-          }
+          errors.push(...checkEvidenceQuality(evidenceContent, claim.id, claim.label));
         }
         break;
       }
@@ -332,17 +347,14 @@ function validateClaimStructure(text) {
           });
         } else {
           const evidenceContent = evidenceLine.replace(/^evidence:\s*/i, '').trim();
-          // Check for vague evidence before timing check
           if (VAGUE_EVIDENCE_RE.test(evidenceContent)) {
-            errors.push({
-              code: 'vague_verified_evidence',
-              claimId: claim.id,
-              label: 'CAUSAL',
-              message: `CAUSAL evidence must cite a concrete source (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:), not "${evidenceLine.trim()}"`,
-            });
+            // Vague evidence: blocks before timing check (same as VERIFIED).
+            errors.push(...checkEvidenceQuality(evidenceContent, claim.id, 'CAUSAL'));
           } else {
             // Check for timing-only evidence: the evidence sentence contains timing
             // correlation patterns but no mechanism indicators.
+            // Timing check takes precedence over unnormalized_evidence for CAUSAL —
+            // a timing-only claim is a stronger signal than a missing prefix.
             const hasTiming =
               TIMING_WORDS_RE.test(evidenceContent) || TIMING_CORRELATION_RE.test(evidenceContent);
             if (hasTiming) {
@@ -360,7 +372,7 @@ function validateClaimStructure(text) {
                 code: 'unnormalized_evidence',
                 claimId: claim.id,
                 label: 'CAUSAL',
-                message: `CAUSAL evidence should use a normalized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:)`,
+                message: `CAUSAL evidence should use a recognized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:, Code:, Command:, Output:, Error:, Config:, Trace:, Repro:)`,
               });
             }
           }

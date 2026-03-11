@@ -149,6 +149,9 @@ const BACKTICK_RE = /`[^`\n]+`/; // inline code — tested against raw (pre-stri
 // The `g` flag is required so the for...of loop in findTriggerMatches() can iterate all occurrences.
 const EVALUATIVE_DESIGN_TELLS =
   /\b(?:the\s+cleanest\s+fix|the\s+simplest\s+fix|cleanest\s+solution|simplest\s+solution|cleanest\s+approach|simplest\s+approach|the\s+obvious\s+fix|the\s+obvious\s+solution)\b/gi;
+// Module-scope global variant for matchAll() — avoids per-call RegExp recompilation and
+// eliminates the lastIndex drift trap that a shared `g`-flagged regex carries across calls.
+const EVALUATIVE_DESIGN_TELLS_GLOBAL = new RegExp(EVALUATIVE_DESIGN_TELLS.source, 'gi');
 
 /**
  * Determine whether evidence-like tokens or inline code appear near a given index in the text.
@@ -500,13 +503,9 @@ function findTriggerMatches(text) {
   // These phrases assert a conclusion ("cleanest", "simplest", "obvious") on a
   // proposed change without evidence. The regex canary fires on exact multi-word
   // phrases with near-zero false-positive risk.
-  // Ensure we always pass a global regex into matchAll(), even if the base
-  // EVALUATIVE_DESIGN_TELLS definition is missing the `g` flag.
-  const edcFlags = EVALUATIVE_DESIGN_TELLS.flags.includes('g')
-    ? EVALUATIVE_DESIGN_TELLS.flags
-    : `${EVALUATIVE_DESIGN_TELLS.flags}g`;
-  const edcGlobal = new RegExp(EVALUATIVE_DESIGN_TELLS.source, edcFlags);
-  for (const edcMatch of haystack.matchAll(edcGlobal)) {
+  // Reset lastIndex before matchAll() — module-scope `g`-flagged regexes retain state.
+  EVALUATIVE_DESIGN_TELLS_GLOBAL.lastIndex = 0;
+  for (const edcMatch of haystack.matchAll(EVALUATIVE_DESIGN_TELLS_GLOBAL)) {
     if (isIndexWithinQuestion(haystack, edcMatch.index)) continue;
     matches.push({ kind: 'evaluative_design_claim', evidence: edcMatch[0].trim() });
   }

@@ -272,7 +272,7 @@ function printUsage() {
       '',
       'Labels: fp=false positive, fn=false negative, tp=true positive, tn=true negative',
       '',
-      'Categories: speculation_language, causality_language, pseudo_quantification, completeness_claim',
+      'Categories: speculation_language, causality_language, pseudo_quantification, completeness_claim, evaluative_design_claim',
       '',
     ].join('\n'),
   );

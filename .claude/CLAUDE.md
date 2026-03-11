@@ -56,7 +56,7 @@ Seven canonical labels. Only `[VERIFIED]` and `[CAUSAL]` may persist to memory, 
 
 Recognized prefixes: `File:` `Log:` `Test:` `Doc:` `Tool:` `User:` `Transcript:` `Code:` `Command:` `Output:` `Error:` `Config:` `Trace:` `Repro:`
 
-CORRELATED also accepts normalized prefixes but triggers a warning (not a block) when absent.
+CORRELATED also accepts normalized prefixes and blocks when absent (same as VERIFIED/CAUSAL).
 
 ```text
 ANSWER
@@ -82,10 +82,10 @@ The validator (`validateClaimStructure`) blocks when:
 | `unlabeled_claim` / `unsupported_answer_content` | ANSWER contains recommendations, conclusions, judgments, or causal statements                 |
 | `missing_claim_id`                               | Claim label present but no ID (e.g., `[VERIFIED]` without `[c1]`)                             |
 | `duplicate_claim_id`                             | Same ID used more than once                                                                   |
-| `missing_metadata`                               | Required metadata field absent for the label                                                  |
+| `missing_evidence` / `missing_basis` / etc.      | Required metadata field absent for the label (code per metadata type)                         |
 | `invalid_memory_write`                           | MEMORY WRITE lists non-retainable claims as Allowed, or retainable claims absent from Allowed |
 | `vague_verified_evidence`                        | VERIFIED or CAUSAL evidence uses non-specific text instead of a normalized prefix             |
-| `unnormalized_evidence`                          | VERIFIED, CAUSAL, or CORRELATED evidence present but no recognized prefix (warning)           |
+| `unnormalized_evidence`                          | VERIFIED, CAUSAL, or CORRELATED evidence present but no recognized prefix (blocks)            |
 
 ### Trigger detection categories (5 active)
 
@@ -100,7 +100,7 @@ The validator (`validateClaimStructure`) blocks when:
 | Function                         | File                                | Returns                                 |
 | -------------------------------- | ----------------------------------- | --------------------------------------- |
 | `validateClaimStructure(text)`   | `hallucination-claim-structure.cjs` | `{ structured, valid, errors, claims }` |
-| `findTriggerMatches(text)`       | `hallucination-audit-stop.cjs`      | `[{ kind, evidence, offset }]`          |
+| `findTriggerMatches(text)`       | `hallucination-audit-stop.cjs`      | `[{ kind, evidence }]`                  |
 | `computeMemoryGate(claims)`      | `hallucination-memory-gate.cjs`     | `{ allowed: Set, blocked: Set }`        |
 | `loadConfig()` / `loadWeights()` | `hallucination-config.cjs`          | Config/weight objects with defaults     |
 
