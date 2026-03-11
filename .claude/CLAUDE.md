@@ -18,20 +18,78 @@ A Claude Code stop-hook plugin that audits assistant output for speculation, ung
 | `scripts/hallucination-memory-gate.cjs`           | Memory gate — `computeMemoryGate()` with `RETAINABLE_LABELS` for persistence gating.                                                                                                                                         |
 | `hooks/hooks.json`                                | Registers both hooks with Claude Code.                                                                                                                                                                                       |
 
-### Detection categories (4 active)
+### Two-layer detection architecture
+
+The stop hook runs two detection layers in sequence. This is the core architectural decision.
+
+**Layer 1: Structured claim validation** — If the response contains labeled claim sections (`[VERIFIED]`, `[INFERRED]`, etc.), `validateClaimStructure()` from `hallucination-claim-structure.cjs` runs first. It checks structural correctness: every claim has an ID and label, required metadata fields are present, MEMORY WRITE is valid. Structural violations block before trigger scanning runs.
+
+**Layer 2: Trigger-phrase backstop** — If the response is unstructured (no claim labels detected), or after structural validation passes, `findTriggerMatches()` scans for risky language. When the response is structured, trigger scanning uses structure-aware exceptions — properly labeled `[INFERRED]` or `[SPECULATION]` text is not blocked for speculation language.
+
+### Claim label taxonomy
+
+Seven canonical labels. Only `[VERIFIED]` and `[CAUSAL]` may persist to memory, task state, summaries, or downstream agent context.
+
+| Label           | Retain? | Required metadata  | Meaning                                                 |
+| --------------- | ------- | ------------------ | ------------------------------------------------------- |
+| `[VERIFIED]`    | yes     | `Evidence:`        | Backed by code, logs, tests, docs, tool output          |
+| `[CAUSAL]`      | yes     | `Evidence:`        | Causation shown by experiment, mechanism, or comparison |
+| `[INFERRED]`    | no      | `Basis:`           | Working theory; useful for reasoning, never for memory  |
+| `[UNKNOWN]`     | no      | `Missing:`         | Missing evidence or unresolved ambiguity                |
+| `[SPECULATION]` | no      | `Basis:`           | Low-evidence possibility                                |
+| `[CORRELATED]`  | no      | `Evidence:`        | Association observed, causation not established         |
+| `[REJECTED]`    | no      | `Contradicted by:` | Previously considered, now contradicted                 |
+
+**Key semantic distinctions:**
+
+- `[UNKNOWN]` vs `[SPECULATION]`: UNKNOWN = no evidence to say anything. SPECULATION = proposing a low-evidence possibility.
+- `[CORRELATED]` vs `[CAUSAL]`: CORRELATED must never be rewritten as CAUSAL. Timing or co-occurrence alone is not causation.
+- `[CAUSAL]` vs `[VERIFIED]`: CAUSAL has a higher bar — requires mechanism, experiment, controlled comparison, or authoritative source. A fact can be VERIFIED without proving causation.
+
+### Structured response contract
+
+When a response uses the structured format, it must include labeled claim sections and a MEMORY WRITE section:
+
+```text
+ANSWER
+- Direct response (no new facts beyond what's in claim sections)
+
+VERIFIED
+- [VERIFIED][c1] <atomic claim>
+  Evidence: <file, line, log, test, doc, or tool output>
+
+INFERRED
+- [INFERRED][c2] <working theory>
+  Basis: <why inferred>
+
+MEMORY WRITE
+- Allowed: c1
+- Blocked: c2
+```
+
+The validator (`validateClaimStructure`) blocks when: unlabeled substantive claims exist, claim IDs are missing or duplicated, required metadata is absent, MEMORY WRITE lists non-retainable claims as Allowed, or retainable claims are missing from Allowed.
+
+### Trigger detection categories (5 active)
 
 1. `speculation_language` — "I think", "probably", "likely", etc.
 2. `causality_language` — "because", "caused by", "due to" without evidence nearby
 3. `pseudo_quantification` — quality scores (N/10), ungrounded percentages
 4. `completeness_claim` — "all files checked", "fully resolved", etc.
+5. `evaluative_design_claim` — ungrounded quality/design assertions
 
-### Key function: `findTriggerMatches(text)`
+### Key functions
 
-Defined in `scripts/hallucination-audit-stop.cjs` and exported via `module.exports.findTriggerMatches`. Returns `[{ kind, evidence, offset }]`.
+| Function                         | File                                | Returns                                 |
+| -------------------------------- | ----------------------------------- | --------------------------------------- |
+| `validateClaimStructure(text)`   | `hallucination-claim-structure.cjs` | `{ structured, valid, errors, claims }` |
+| `findTriggerMatches(text)`       | `hallucination-audit-stop.cjs`      | `[{ kind, evidence, offset }]`          |
+| `computeMemoryGate(claims)`      | `hallucination-memory-gate.cjs`     | `{ allowed: Set, blocked: Set }`        |
+| `loadConfig()` / `loadWeights()` | `hallucination-config.cjs`          | Config/weight objects with defaults     |
 
 ### Suppression mechanisms
 
 - `stripLowSignalRegions(text)` — removes code blocks, inline code, blockquotes before matching
+- `stripLabeledClaimLines(text)` — removes properly labeled claim lines so trigger scanning skips them
 - `isIndexWithinQuestion(text, index)` — exempts sentences containing "?"
 - `hasEvidenceNearby(text, rawText, index)` — 150-char window check for evidence markers
 - `hasEnumerationNearby(text, index)` — 200-char preceding window for numbered/bulleted lists
@@ -162,9 +220,9 @@ After every push, follow this sequence:
    node .claude/scripts/gh-api.cjs review-comment list <pr-number>
    ```
 
-### Adding a new detection category
+### Adding a new trigger detection category
 
-This is the most common type of change. Follow this pattern exactly:
+For adding a new trigger-phrase pattern (Layer 2):
 
 1. Add a new block inside `findTriggerMatches()` in `scripts/hallucination-audit-stop.cjs`
 2. Use the same structure as existing categories:
@@ -176,6 +234,18 @@ This is the most common type of change. Follow this pattern exactly:
    - Test positive matches (text that should trigger)
    - Test negative matches (text that should NOT trigger — suppression cases)
 4. Run `pnpm test` and `pnpm run lint` before committing
+
+### Adding a new structural validation rule
+
+For adding a new claim structure check (Layer 1):
+
+1. Add the validation logic inside `validateClaimStructure()` in `scripts/hallucination-claim-structure.cjs`
+2. Push errors with `{ code: 'your_code', claimId, label, message }` to the errors array
+3. Add tests in `tests/hallucination-claim-structure.test.cjs`:
+   - Test that valid structured responses pass
+   - Test that the specific violation is caught
+4. If the rule involves persistence, update `RETAINABLE_LABELS` in `hallucination-memory-gate.cjs`
+5. Run `pnpm test` and `pnpm run lint` before committing
 
 ## `.claude/` Directory Structure
 
