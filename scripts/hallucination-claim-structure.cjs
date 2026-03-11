@@ -43,6 +43,17 @@ const MECHANISM_RE =
 const CLAIM_VERBS_RE =
   /\b(?:causes|caused|fails|failed|returns|broke|is\s+broken|is\s+missing|does\s+not|cannot|will\s+not|was\s+introduced|was\s+changed)\b/i;
 const CLAIM_ARCHITECTURAL_RE = /(?:the\s+.{0,30}\s+is\s+.{0,30}because|the\s+root\s+cause)/i;
+// Recommendations, conclusions, judgments, and causal statements that do not belong in ANSWER
+const CLAIM_SUBSTANTIVE_RE =
+  /\b(?:should|must|need\s+to|recommend|I\s+would|therefore|in\s+conclusion|this\s+means|the\s+result\s+is|better|worse|correct|incorrect|the\s+right\s+approach|the\s+best|because|caused\s+by|due\s+to|the\s+reason\s+is)\b/i;
+
+// Vague evidence patterns that reference session memory instead of concrete sources
+const VAGUE_EVIDENCE_RE =
+  /\b(?:reported\s+(?:in|during)\s+this\s+session|found\s+earlier|as\s+(?:discussed|mentioned|noted)\s+(?:above|earlier|before)|agent\s+findings|(?:we|I)\s+(?:saw|found|noted)\s+(?:earlier|before|previously)|per\s+(?:earlier|previous)\s+(?:discussion|finding|analysis))\b/i;
+
+// Evidence prefix normalization — recognized concrete source prefixes
+const EVIDENCE_PREFIX_RE =
+  /^\s*(?:User|File|Log|Test|Doc|Tool|Transcript|Code|Command|Output|Error|Config|Trace|Repro):/i;
 
 /**
  * Parse claim lines from a block of text.
@@ -207,7 +218,13 @@ function detectUnlabeledClaims(answerLines) {
     const trimmed = line.trim();
     if (trimmed.length <= 60) continue;
     if (trimmed.startsWith('-') || trimmed.startsWith('*')) continue;
-    if (CLAIM_VERBS_RE.test(trimmed) || CLAIM_ARCHITECTURAL_RE.test(trimmed)) {
+    // Skip lines that reference claim IDs — they are pointers, not substantive claims
+    if (/\[?c\d+\]?/.test(trimmed)) continue;
+    if (
+      CLAIM_VERBS_RE.test(trimmed) ||
+      CLAIM_ARCHITECTURAL_RE.test(trimmed) ||
+      CLAIM_SUBSTANTIVE_RE.test(trimmed)
+    ) {
       flagged.push(trimmed);
     }
   }
@@ -283,6 +300,23 @@ function validateClaimStructure(text) {
             label: claim.label,
             message: `${claim.label} claims require Evidence:`,
           });
+        } else {
+          const evidenceContent = evidenceLine.replace(/^evidence:\s*/i, '').trim();
+          if (VAGUE_EVIDENCE_RE.test(evidenceContent)) {
+            errors.push({
+              code: 'vague_verified_evidence',
+              claimId: claim.id,
+              label: claim.label,
+              message: `${claim.label} evidence must cite a concrete source (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:), not "${evidenceLine.trim()}"`,
+            });
+          } else if (!EVIDENCE_PREFIX_RE.test(evidenceContent)) {
+            errors.push({
+              code: 'unnormalized_evidence',
+              claimId: claim.id,
+              label: claim.label,
+              message: `${claim.label} evidence should use a normalized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:)`,
+            });
+          }
         }
         break;
       }
@@ -297,19 +331,36 @@ function validateClaimStructure(text) {
             message: 'CAUSAL claims require Evidence:',
           });
         } else {
-          // Check for timing-only evidence: the evidence sentence contains timing
-          // correlation patterns but no mechanism indicators.
           const evidenceContent = evidenceLine.replace(/^evidence:\s*/i, '').trim();
-          const hasTiming =
-            TIMING_WORDS_RE.test(evidenceContent) || TIMING_CORRELATION_RE.test(evidenceContent);
-          if (hasTiming) {
-            const hasMechanism = MECHANISM_RE.test(evidenceContent);
-            if (!hasMechanism) {
+          // Check for vague evidence before timing check
+          if (VAGUE_EVIDENCE_RE.test(evidenceContent)) {
+            errors.push({
+              code: 'vague_verified_evidence',
+              claimId: claim.id,
+              label: 'CAUSAL',
+              message: `CAUSAL evidence must cite a concrete source (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:), not "${evidenceLine.trim()}"`,
+            });
+          } else {
+            // Check for timing-only evidence: the evidence sentence contains timing
+            // correlation patterns but no mechanism indicators.
+            const hasTiming =
+              TIMING_WORDS_RE.test(evidenceContent) || TIMING_CORRELATION_RE.test(evidenceContent);
+            if (hasTiming) {
+              const hasMechanism = MECHANISM_RE.test(evidenceContent);
+              if (!hasMechanism) {
+                errors.push({
+                  code: 'weak_causal_evidence',
+                  claimId: claim.id,
+                  label: 'CAUSAL',
+                  message: `CAUSAL claim ${claim.id} has timing-only evidence (not mechanism or controlled comparison)`,
+                });
+              }
+            } else if (!EVIDENCE_PREFIX_RE.test(evidenceContent)) {
               errors.push({
-                code: 'weak_causal_evidence',
+                code: 'unnormalized_evidence',
                 claimId: claim.id,
                 label: 'CAUSAL',
-                message: `CAUSAL claim ${claim.id} has timing-only evidence (not mechanism or controlled comparison)`,
+                message: `CAUSAL evidence should use a normalized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:)`,
               });
             }
           }
@@ -431,4 +482,8 @@ module.exports = {
   parseMemoryWriteSection,
   extractAnswerLines,
   detectUnlabeledClaims,
+  // Exported regex constants for testing
+  CLAIM_SUBSTANTIVE_RE,
+  VAGUE_EVIDENCE_RE,
+  EVIDENCE_PREFIX_RE,
 };

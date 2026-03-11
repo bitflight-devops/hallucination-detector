@@ -64,7 +64,7 @@ When a response contains substantive claims about causality, system state, or di
 
 Every structured response must include:
 
-1. **ANSWER** — direct response to the task
+1. **ANSWER** — brief task acknowledgment and pointers to labeled claims only. No recommendations, conclusions, factual assertions, causal statements, or judgments. Any substantive content must appear as a labeled claim.
 2. **Labeled claim sections** — one or more of the label sections above, each claim on its own line as \`[LABEL][cN] <claim text>\` followed by the required metadata field
 3. **NEXT VERIFICATION** — the smallest concrete check to upgrade an INFERRED, SPECULATION, or CORRELATED claim
 4. **MEMORY WRITE** — lists which claim IDs are allowed (VERIFIED + CAUSAL only) and which are blocked (all others)
@@ -81,7 +81,9 @@ MEMORY WRITE
 
 [CAUSAL] claims require mechanism evidence — not timing correlation. "The outage coincided with the deploy" is not mechanism evidence. "EXPLAIN ANALYZE shows Seq Scan" is mechanism evidence.
 
-[CORRELATED] claims must NOT use causal verbs (caused, because, due to, led to, resulted in). A correlation is an observed co-occurrence only.`;
+[CORRELATED] claims must NOT use causal verbs (caused, because, due to, led to, resulted in). A correlation is an observed co-occurrence only.
+
+Evidence prefixes: \`File:\`, \`Log:\`, \`Test:\`, \`Doc:\`, \`Tool:\`, \`User:\`, \`Transcript:\`, \`Code:\`, \`Command:\`, \`Output:\`, \`Error:\`, \`Config:\`, \`Trace:\`, \`Repro:\``;
 
 /**
  * Build the guide-mode framing text used when introspection mode is active.

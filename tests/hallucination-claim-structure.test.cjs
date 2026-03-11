@@ -56,7 +56,7 @@ describe('validateClaimStructure — valid structured responses', () => {
 
 VERIFIED
 - [VERIFIED][c1] The config file is at /etc/app.json
-  Evidence: Read tool confirmed the file exists at that path.
+  Evidence: Tool: Read tool confirmed the file exists at that path.
 
 INFERRED
 - [INFERRED][c2] The service restarts on config change
@@ -109,7 +109,7 @@ MEMORY WRITE
 
 CORRELATED
 - [CORRELATED][c1] High memory usage and slow response times co-occur
-  Evidence: Both metrics spike at the same time in the dashboard.
+  Evidence: Log: Both metrics spike at the same time in the dashboard.
 
 MEMORY WRITE
 - Allowed: (none)
@@ -125,7 +125,7 @@ MEMORY WRITE
 
 CAUSAL
 - [CAUSAL][c1] The missing index causes full table scans
-  Evidence: EXPLAIN ANALYZE output shows Seq Scan on orders (cost=0.00..45231.00).
+  Evidence: Output: EXPLAIN ANALYZE output shows Seq Scan on orders (cost=0.00..45231.00).
 
 MEMORY WRITE
 - Allowed: c1
@@ -141,11 +141,11 @@ MEMORY WRITE
 
 VERIFIED
 - [VERIFIED][c1] The endpoint returns 200
-  Evidence: curl output showed HTTP/1.1 200 OK.
+  Evidence: Command: curl output showed HTTP/1.1 200 OK.
 
 CAUSAL
 - [CAUSAL][c2] The missing index causes full table scans
-  Evidence: EXPLAIN ANALYZE shows Seq Scan.
+  Evidence: Output: EXPLAIN ANALYZE shows Seq Scan.
 
 MEMORY WRITE
 - Allowed: c1, c2
@@ -336,6 +336,115 @@ MEMORY WRITE
     const err = result.errors.find((e) => e.code === 'multiple_labels');
     expect(err).toBeDefined();
     expect(err.claimId).toBe('c1');
+  });
+});
+
+// =============================================================================
+// detectUnlabeledClaims — strengthened ANSWER section validation
+// =============================================================================
+describe('validateClaimStructure — strengthened unlabeled_claim detection', () => {
+  it('ANSWER containing a recommendation produces unlabeled_claim', () => {
+    const text = [
+      'ANSWER',
+      'Both items should be corrected before the next release to avoid regression in production.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The config file exists at /app/config.yml',
+      '  Evidence: File: /app/config.yml confirmed via Read tool',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.some((e) => e.code === 'unlabeled_claim')).toBe(true);
+  });
+
+  it('ANSWER with claim ID reference does not produce unlabeled_claim', () => {
+    const text = [
+      'ANSWER',
+      '- Request acknowledged. See claims c1 and c2 below for details on what should change.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The config uses 4-space indentation',
+      '  Evidence: File: /app/.editorconfig line 3',
+      '',
+      'INFERRED',
+      '- [INFERRED][c2] The linter expects 2-space indentation',
+      '  Basis: Default eslint config pattern',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked: c2',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.filter((e) => e.code === 'unlabeled_claim')).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// vague_verified_evidence — evidence quality check
+// =============================================================================
+describe('validateClaimStructure — vague_verified_evidence', () => {
+  it('VERIFIED with vague evidence produces vague_verified_evidence', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] All prompt hooks are on SubagentStop',
+      '  Evidence: Explore agent findings reported in this session',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.some((e) => e.code === 'vague_verified_evidence')).toBe(true);
+  });
+
+  it('VERIFIED with concrete evidence does not produce vague_verified_evidence', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] The handler returns 400 before any DB call',
+      '  Evidence: File: src/handlers/create.js line 47',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.filter((e) => e.code === 'vague_verified_evidence')).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// unnormalized_evidence — evidence prefix validation
+// =============================================================================
+describe('validateClaimStructure — unnormalized_evidence', () => {
+  it('VERIFIED with unprefixed evidence produces unnormalized_evidence', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] The retry logic has a nil dereference',
+      '  Evidence: stack trace shows panic at line 88',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.some((e) => e.code === 'unnormalized_evidence')).toBe(true);
+  });
+
+  it('VERIFIED with prefixed evidence does not produce unnormalized_evidence', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] The retry logic has a nil dereference',
+      '  Evidence: Trace: stack trace shows panic at line 88',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.filter((e) => e.code === 'unnormalized_evidence')).toHaveLength(0);
   });
 });
 

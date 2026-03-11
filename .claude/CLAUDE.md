@@ -48,15 +48,23 @@ Seven canonical labels. Only `[VERIFIED]` and `[CAUSAL]` may persist to memory, 
 
 ### Structured response contract
 
-When a response uses the structured format, it must include labeled claim sections and a MEMORY WRITE section:
+**Required sections:** ANSWER, MEMORY WRITE. All others are optional — omit sections when no claims of that type exist.
+
+**ANSWER restrictions:** Brief task acknowledgment and pointers to labeled claims only. Blocked content: recommendations, conclusions, factual assertions, causal statements, judgments. Exception: lines referencing claim IDs (e.g., "See c1 below") are permitted.
+
+**Evidence quality rules for VERIFIED and CAUSAL:** Evidence must use a normalized prefix. Vague references ("reported in this session", "found earlier", "as discussed above", "agent findings") are blocked.
+
+Recognized prefixes: `File:` `Log:` `Test:` `Doc:` `Tool:` `User:` `Transcript:` `Code:` `Command:` `Output:` `Error:` `Config:` `Trace:` `Repro:`
+
+CORRELATED also accepts normalized prefixes but triggers a warning (not a block) when absent.
 
 ```text
 ANSWER
-- Direct response (no new facts beyond what's in claim sections)
+- Task acknowledged. Claim c1 identifies the root cause.
 
 VERIFIED
 - [VERIFIED][c1] <atomic claim>
-  Evidence: <file, line, log, test, doc, or tool output>
+  Evidence: File: scripts/hallucination-claim-structure.cjs:42
 
 INFERRED
 - [INFERRED][c2] <working theory>
@@ -67,7 +75,17 @@ MEMORY WRITE
 - Blocked: c2
 ```
 
-The validator (`validateClaimStructure`) blocks when: unlabeled substantive claims exist, claim IDs are missing or duplicated, required metadata is absent, MEMORY WRITE lists non-retainable claims as Allowed, or retainable claims are missing from Allowed.
+The validator (`validateClaimStructure`) blocks when:
+
+| Error code                                       | Condition                                                                                     |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `unlabeled_claim` / `unsupported_answer_content` | ANSWER contains recommendations, conclusions, judgments, or causal statements                 |
+| `missing_claim_id`                               | Claim label present but no ID (e.g., `[VERIFIED]` without `[c1]`)                             |
+| `duplicate_claim_id`                             | Same ID used more than once                                                                   |
+| `missing_metadata`                               | Required metadata field absent for the label                                                  |
+| `invalid_memory_write`                           | MEMORY WRITE lists non-retainable claims as Allowed, or retainable claims absent from Allowed |
+| `vague_verified_evidence`                        | VERIFIED or CAUSAL evidence uses non-specific text instead of a normalized prefix             |
+| `unnormalized_evidence`                          | VERIFIED, CAUSAL, or CORRELATED evidence present but no recognized prefix (warning)           |
 
 ### Trigger detection categories (5 active)
 
