@@ -1,3 +1,9 @@
+## [1.10.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.10.0...v1.10.1) (2026-03-11)
+
+### Bug Fixes
+
+- **detection:** remove "nothing left to do" from completeness triggers ([1a16d0c](https://github.com/bitflight-devops/hallucination-detector/commit/1a16d0ca142ac5707a10ad5a6997330189257332))
+
 ## [1.10.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.9.0...v1.10.0) (2026-03-10)
 
 ### Features
