@@ -1,3 +1,9 @@
+## [1.11.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.10.1...v1.11.0) (2026-03-11)
+
+### Features
+
+- **detection:** tighten ANSWER enforcement, evidence quality, and prefix normalization ([2ee5adb](https://github.com/bitflight-devops/hallucination-detector/commit/2ee5adbe1f666d60271996a0c7e375e10b6cbe55))
+
 ## [1.10.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.10.0...v1.10.1) (2026-03-11)
 
 ### Bug Fixes
