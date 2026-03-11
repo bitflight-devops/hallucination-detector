@@ -27,7 +27,9 @@
       "**/*.json",
       "!**/node_modules",
       "!**/dist",
-      "!**/coverage"
+      "!**/coverage",
+      "!.claude/worktrees",
+      "!.worktrees"
     ]
   }
 }

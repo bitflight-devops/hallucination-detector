@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.claude/worktrees/
+.worktrees/
 pnpm-lock.yaml
 # Biome owns JS/JSON formatting — avoid conflicts
 *.cjs
