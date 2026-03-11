@@ -313,6 +313,12 @@ describe('completeness claims', () => {
     expect(kinds).toContain('completeness_claim');
   });
 
+  it('does not flag "nothing left to do" as completeness_claim', () => {
+    const matches = findTriggerMatches('The working tree is clean — nothing left to do here.');
+    const kinds = matches.map((m) => m.kind);
+    expect(kinds).not.toContain('completeness_claim');
+  });
+
   it('suppresses structural completeness near enumerated list', () => {
     const text =
       '1. Fixed auth module\n2. Fixed db layer\n3. Fixed API routes\nAll issues have been fixed.';

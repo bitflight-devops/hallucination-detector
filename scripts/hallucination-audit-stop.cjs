@@ -451,7 +451,6 @@ function findTriggerMatches(text) {
     'no errors found',
     'no remaining issues',
     'no remaining errors',
-    'nothing left to do',
     'task is complete',
     'task is done',
     'fully implemented',
