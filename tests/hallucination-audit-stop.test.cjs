@@ -723,6 +723,171 @@ describe('scoreText', () => {
 });
 
 // =============================================================================
+// getLabelForScore — custom thresholds
+// =============================================================================
+describe('getLabelForScore — custom thresholds', () => {
+  it('uses custom uncertain threshold', () => {
+    // With uncertain: 0.5, scores below 0.5 are GROUNDED
+    expect(getLabelForScore(0.4, { uncertain: 0.5, hallucinated: 0.8 })).toBe('GROUNDED');
+    expect(getLabelForScore(0.5, { uncertain: 0.5, hallucinated: 0.8 })).toBe('UNCERTAIN');
+  });
+
+  it('uses custom hallucinated threshold', () => {
+    // With hallucinated: 0.8, scores up to 0.8 are UNCERTAIN
+    expect(getLabelForScore(0.75, { uncertain: 0.3, hallucinated: 0.8 })).toBe('UNCERTAIN');
+    expect(getLabelForScore(0.81, { uncertain: 0.3, hallucinated: 0.8 })).toBe('HALLUCINATED');
+  });
+
+  it('still applies default thresholds when thresholds argument is omitted', () => {
+    expect(getLabelForScore(0.29)).toBe('GROUNDED');
+    expect(getLabelForScore(0.3)).toBe('UNCERTAIN');
+    expect(getLabelForScore(0.61)).toBe('HALLUCINATED');
+  });
+
+  it('falls back to default uncertain when provided value is non-finite', () => {
+    expect(getLabelForScore(0.29, { uncertain: Number.NaN, hallucinated: 0.6 })).toBe('GROUNDED');
+    expect(getLabelForScore(0.3, { uncertain: Number.NaN, hallucinated: 0.6 })).toBe('UNCERTAIN');
+  });
+
+  it('falls back to default hallucinated when provided value is negative', () => {
+    expect(getLabelForScore(0.61, { uncertain: 0.3, hallucinated: -1 })).toBe('HALLUCINATED');
+  });
+});
+
+// =============================================================================
+// scoreText — custom thresholds
+// =============================================================================
+describe('scoreText — custom thresholds', () => {
+  it('applies custom thresholds to label computation', () => {
+    // speculation_language weight = 0.25, weightSum = 1.3 → score ≈ 0.192 → GROUNDED by default
+    // With uncertain: 0.1, score 0.192 crosses into UNCERTAIN
+    const results = scoreText('I think it works.', DEFAULT_WEIGHTS, {
+      uncertain: 0.1,
+      hallucinated: 0.6,
+    });
+    expect(results[0].label).toBe('UNCERTAIN');
+  });
+
+  it('can make a borderline UNCERTAIN sentence GROUNDED by raising the uncertain threshold', () => {
+    // causality_language weight = 0.30, weightSum = 1.3 → score ≈ 0.231 → GROUNDED by default
+    // Confirm it is GROUNDED with default thresholds
+    const defaultResults = scoreText('The test breaks because the config is missing.');
+    expect(defaultResults[0].label).toBe('GROUNDED');
+    // Still GROUNDED with a raised uncertain threshold of 0.4
+    const customResults = scoreText(
+      'The test breaks because the config is missing.',
+      DEFAULT_WEIGHTS,
+      { uncertain: 0.4, hallucinated: 0.8 },
+    );
+    expect(customResults[0].label).toBe('GROUNDED');
+  });
+
+  it('label is HALLUCINATED when thresholds are set very low', () => {
+    const results = scoreText('I think it works.', DEFAULT_WEIGHTS, {
+      uncertain: 0.0,
+      hallucinated: 0.0,
+    });
+    // Any score > 0.0 → HALLUCINATED
+    expect(results[0].label).toBe('HALLUCINATED');
+  });
+});
+
+// =============================================================================
+// buildBlockReason — sentence-level section
+// =============================================================================
+describe('buildBlockReason — sentence-level section', () => {
+  it('includes sentence-level section when UNCERTAIN sentence is present', () => {
+    const matches = [{ kind: 'speculation_language', evidence: 'i think' }];
+    // "I think everything is fixed because of the change." → speculation + causality + completeness
+    // score ≈ (0.25+0.30+0.20)/1.30 ≈ 0.577 → UNCERTAIN
+    const sentenceScores = scoreText('I think everything is fixed because of the change.');
+    const flagged = sentenceScores.filter((r) => r.label !== 'GROUNDED');
+    expect(flagged.length).toBeGreaterThan(0);
+    const reason = buildBlockReason(matches, sentenceScores);
+    expect(reason).toContain('Sentence-level analysis:');
+    expect(reason).toContain('sentence 1 of 1');
+  });
+
+  it('includes sentence index and total in the sentence-level section', () => {
+    const text =
+      'The test ran cleanly. I think everything is fixed because of the change. All done.';
+    const sentenceScores = scoreText(text);
+    const matches = findTriggerMatches(text);
+    const reason = buildBlockReason(matches, sentenceScores);
+    // Should mention "of 3" for 3 sentences
+    expect(reason).toContain('of 3');
+  });
+
+  it('omits sentence-level section when all sentences are GROUNDED', () => {
+    const matches = [{ kind: 'speculation_language', evidence: 'i think' }];
+    // Force all sentences to GROUNDED by passing empty sentenceScores array
+    const reason = buildBlockReason(matches, []);
+    expect(reason).not.toContain('Sentence-level analysis:');
+  });
+
+  it('omits sentence-level section when sentenceScores is not provided', () => {
+    const matches = [{ kind: 'speculation_language', evidence: 'i think' }];
+    const reason = buildBlockReason(matches);
+    expect(reason).not.toContain('Sentence-level analysis:');
+  });
+
+  it('sentence snippet in reason is wrapped in backticks to prevent self-triggering', () => {
+    const text = 'I think this is broken.';
+    const sentenceScores = scoreText(text, { speculation_language: 1 });
+    const matches = [{ kind: 'speculation_language', evidence: 'i think' }];
+    const reason = buildBlockReason(matches, sentenceScores);
+    // The sentence snippet line should start with "- sentence" and contain backtick-wrapped text
+    const sentenceLine = reason.split('\n').find((l) => l.startsWith('- sentence'));
+    expect(sentenceLine).toBeDefined();
+    expect(sentenceLine).toMatch(/`[^`]+`/);
+  });
+
+  it('block reason with sentence-level section does not re-trigger findTriggerMatches', () => {
+    const text = 'I think everything is fixed because of the change.';
+    const sentenceScores = scoreText(text);
+    const matches = findTriggerMatches(text);
+    expect(matches.length).toBeGreaterThan(0);
+    const reason = buildBlockReason(matches, sentenceScores);
+    // The block reason must not trigger the hook a second time
+    const secondPassMatches = findTriggerMatches(reason);
+    expect(secondPassMatches.length).toBe(0);
+  });
+
+  it('shows HALLUCINATED label in sentence-level section', () => {
+    // With speculation_language weight = 1.0, score = 1.0 → HALLUCINATED
+    const text = 'I think it works.';
+    const sentenceScores = scoreText(text, { speculation_language: 1.0 });
+    const matches = [{ kind: 'speculation_language', evidence: 'i think' }];
+    const reason = buildBlockReason(matches, sentenceScores);
+    expect(reason).toContain('[HALLUCINATED]');
+  });
+
+  it('truncates long sentence snippets to at most 60 characters plus ellipsis', () => {
+    const longSentence =
+      'I think this particular sentence is quite deliberately long to exceed the sixty character limit.';
+    const sentenceScores = scoreText(longSentence, { speculation_language: 1.0 });
+    const matches = [{ kind: 'speculation_language', evidence: 'i think' }];
+    const reason = buildBlockReason(matches, sentenceScores);
+    const sentenceLine = reason.split('\n').find((l) => l.startsWith('- sentence'));
+    expect(sentenceLine).toBeDefined();
+    // The backtick-enclosed portion ends with '...'
+    expect(sentenceLine).toContain('...');
+  });
+});
+
+// =============================================================================
+// DEFAULT_THRESHOLDS export
+// =============================================================================
+describe('DEFAULT_THRESHOLDS', () => {
+  it('is exported from hallucination-audit-stop.cjs', () => {
+    const { DEFAULT_THRESHOLDS } = require('../scripts/hallucination-audit-stop.cjs');
+    expect(DEFAULT_THRESHOLDS).toBeDefined();
+    expect(DEFAULT_THRESHOLDS.uncertain).toBe(0.3);
+    expect(DEFAULT_THRESHOLDS.hallucinated).toBe(0.6);
+  });
+});
+
+// =============================================================================
 // Evaluative design claims
 // =============================================================================
 describe('evaluative_design_claim', () => {

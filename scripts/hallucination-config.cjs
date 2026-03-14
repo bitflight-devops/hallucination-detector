@@ -29,10 +29,25 @@ const DEFAULT_WEIGHTS = {
 };
 
 /**
+ * Default thresholds for the three-tier sentence labeling system.
+ *   GROUNDED     : aggregateScore < uncertain
+ *   UNCERTAIN    : uncertain <= aggregateScore <= hallucinated
+ *   HALLUCINATED : aggregateScore > hallucinated
+ *
+ * Both values must be in [0, 1] and uncertain must be <= hallucinated.
+ * Invalid rc values fall back to these defaults.
+ */
+const DEFAULT_THRESHOLDS = {
+  uncertain: 0.3,
+  hallucinated: 0.6,
+};
+
+/**
  * Default full configuration object.
  */
 const DEFAULT_CONFIG = {
   weights: DEFAULT_WEIGHTS,
+  thresholds: DEFAULT_THRESHOLDS,
   introspect: false,
   introspectOutputPath: null,
 };
@@ -42,7 +57,7 @@ const DEFAULT_CONFIG = {
  * in the current working directory. Returns a frozen config object with
  * defaults merged for any missing or invalid fields.
  *
- * @returns {{ weights: object, introspect: boolean, introspectOutputPath: string|null }}
+ * @returns {{ weights: object, thresholds: object, introspect: boolean, introspectOutputPath: string|null }}
  */
 function loadConfig() {
   const rcPath = path.join(process.cwd(), '.hallucination-detectorrc.cjs');
@@ -68,6 +83,25 @@ function loadConfig() {
     }
   }
 
+  // --- thresholds ---
+  const thresholds = { ...DEFAULT_THRESHOLDS };
+  if (rc?.thresholds && typeof rc.thresholds === 'object' && !Array.isArray(rc.thresholds)) {
+    const u = rc.thresholds.uncertain;
+    const h = rc.thresholds.hallucinated;
+    const validU = Number.isFinite(u) && u >= 0 && u <= 1;
+    const validH = Number.isFinite(h) && h >= 0 && h <= 1;
+    // Only apply both values when they form a valid (uncertain <= hallucinated) pair.
+    if (validU && validH && u <= h) {
+      thresholds.uncertain = u;
+      thresholds.hallucinated = h;
+    } else if (validU && !validH && u <= thresholds.hallucinated) {
+      thresholds.uncertain = u;
+    } else if (!validU && validH && thresholds.uncertain <= h) {
+      thresholds.hallucinated = h;
+    }
+    // Any invalid or inverted pair falls back to defaults silently.
+  }
+
   // --- introspect ---
   const introspect = typeof rc?.introspect === 'boolean' ? rc.introspect : false;
 
@@ -75,7 +109,12 @@ function loadConfig() {
   const introspectOutputPath =
     typeof rc?.introspectOutputPath === 'string' ? rc.introspectOutputPath : null;
 
-  return Object.freeze({ weights: Object.freeze(weights), introspect, introspectOutputPath });
+  return Object.freeze({
+    weights: Object.freeze(weights),
+    thresholds: Object.freeze(thresholds),
+    introspect,
+    introspectOutputPath,
+  });
 }
 
 /**
@@ -87,4 +126,4 @@ function loadWeights() {
   return loadConfig().weights;
 }
 
-module.exports = { loadConfig, loadWeights, DEFAULT_WEIGHTS, DEFAULT_CONFIG };
+module.exports = { loadConfig, loadWeights, DEFAULT_WEIGHTS, DEFAULT_THRESHOLDS, DEFAULT_CONFIG };
