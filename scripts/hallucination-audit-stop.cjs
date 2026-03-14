@@ -274,8 +274,10 @@ function findTriggerMatches(text, config = {}) {
 
   /**
    * Run custom `{ pattern, evidence }` patterns for a category and push matches.
-   * String patterns are matched case-insensitively; `/regex/flags` strings are
-   * treated as regular expressions.
+   * `pattern` may be:
+   *   - A real RegExp object (from a `.cjs` config loaded via `require()`).
+   *   - A `/regex/flags`-style string (from JSON/TOML sources).
+   *   - A plain string (matched case-insensitively).
    */
   function runCustomPatterns(catName) {
     const cat = cats[catName];
@@ -284,7 +286,11 @@ function findTriggerMatches(text, config = {}) {
       if (!item || !item.pattern) continue;
       const { pattern, evidence } = item;
       let found = false;
-      if (typeof pattern === 'string' && pattern.startsWith('/')) {
+      if (pattern instanceof RegExp) {
+        // Real RegExp from a .cjs config — test directly against the haystack.
+        found = pattern.test(haystack);
+      } else if (typeof pattern === 'string' && pattern.startsWith('/')) {
+        // "/pattern/flags" string from JSON or TOML sources.
         const lastSlash = pattern.lastIndexOf('/');
         if (lastSlash > 0) {
           try {
@@ -300,7 +306,7 @@ function findTriggerMatches(text, config = {}) {
       if (found) {
         rawMatches.push({
           kind: catName,
-          evidence: typeof evidence === 'string' ? evidence : pattern,
+          evidence: typeof evidence === 'string' ? evidence : String(pattern),
         });
       }
     }
