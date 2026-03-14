@@ -153,6 +153,228 @@ const EVALUATIVE_DESIGN_TELLS =
 // eliminates the lastIndex drift trap that a shared `g`-flagged regex carries across calls.
 const EVALUATIVE_DESIGN_TELLS_GLOBAL = new RegExp(EVALUATIVE_DESIGN_TELLS.source, 'gi');
 
+// =============================================================================
+// Internal contradiction detection — negation polarity heuristics
+// =============================================================================
+
+// Stop words for internal-contradiction term extraction.
+// Narrower than a general NLP stop-word list: domain verbs (works, fails, passes,
+// enabled, etc.) are intentionally kept because they carry semantic weight in
+// technical contradiction pairs.
+const INTERNAL_CONTRADICTION_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'the',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'been',
+  'being',
+  'have',
+  'has',
+  'had',
+  'do',
+  'does',
+  'did',
+  'will',
+  'would',
+  'could',
+  'should',
+  'can',
+  'may',
+  'might',
+  'shall',
+  'must',
+  'it',
+  'this',
+  'that',
+  'these',
+  'those',
+  'in',
+  'on',
+  'at',
+  'to',
+  'for',
+  'of',
+  'with',
+  'by',
+  'from',
+  'as',
+  'into',
+  'through',
+  'before',
+  'after',
+  'up',
+  'down',
+  'out',
+  'off',
+  'so',
+  'yet',
+  'if',
+  'when',
+  'while',
+  'where',
+  'who',
+  'which',
+  'what',
+  'how',
+  'all',
+  'any',
+  'both',
+  'each',
+  'few',
+  'only',
+  'same',
+  'than',
+  'too',
+  'very',
+  'now',
+  'here',
+  'there',
+  'its',
+  'also',
+  'just',
+  'then',
+  'but',
+  'and',
+  'or',
+  'nor',
+  'not',
+  'no',
+  'i',
+  'you',
+  'he',
+  'she',
+  'we',
+  'they',
+  'me',
+  'him',
+  'her',
+  'us',
+  'them',
+  'my',
+  'your',
+  'his',
+  'our',
+  'their',
+  'again',
+  'more',
+  'most',
+  'such',
+  'own',
+]);
+
+// Detects negation polarity in a sentence: "not", "never", standalone "no",
+// negative pronouns (none/nobody/nothing/nowhere), and n't contractions.
+const NEGATION_POLARITY_RE = /\b(?:not|never|no(?:ne|body|thing|where)?|n't)\b/i;
+
+/**
+ * Apply lightweight suffix stripping to normalize common English verb/noun inflections
+ * so that "works"/"work", "passes"/"pass", "running"/"run" etc. compare as equal terms.
+ * Longer suffixes are checked first to avoid under-stripping.
+ *
+ * @param {string} word - Lowercase alphabetic word.
+ * @returns {string} Stemmed form.
+ */
+function stemWord(word) {
+  if (word.length > 6 && word.endsWith('ing')) return word.slice(0, -3);
+  if (word.length > 5 && word.endsWith('ies')) return `${word.slice(0, -3)}y`;
+  if (word.length > 5 && word.endsWith('ed')) return word.slice(0, -2);
+  if (word.length > 5 && word.endsWith('es')) return word.slice(0, -2);
+  if (word.length > 4 && word.endsWith('s')) return word.slice(0, -1);
+  return word;
+}
+
+/**
+ * Extract significant (non-stop-word) lowercase alphabetic terms from a sentence,
+ * applying lightweight stemming so inflected forms compare as equal.
+ *
+ * @param {string} sentence
+ * @returns {string[]}
+ */
+function extractSignificantTerms(sentence) {
+  return sentence
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((w) => w.length >= 3 && !INTERNAL_CONTRADICTION_STOP_WORDS.has(w))
+    .map(stemWord);
+}
+
+/**
+ * Strip negation words and common negative contractions from a sentence to expose
+ * its affirmative predicate core for polarity comparison.
+ *
+ * @param {string} sentence
+ * @returns {string}
+ */
+function stripNegationMarkers(sentence) {
+  return sentence
+    .replace(
+      /\b(?:don't|doesn't|didn't|won't|can't|cannot|couldn't|shouldn't|wouldn't|isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't)\b/gi,
+      '',
+    )
+    .replace(/\b(?:not|never|no(?:ne|body|thing|where)?)\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * Detect self-contradictory sentence pairs within a single response using negation
+ * polarity heuristics.
+ *
+ * Two sentences are considered contradictory when one contains a negation marker and
+ * the other does not, AND after stripping the negation from the negated sentence both
+ * sentences share ≥ 2 significant stemmed terms AND the Jaccard similarity of those
+ * term sets is ≥ 0.4 — indicating they describe the same predicate, one positively
+ * and one negatively.
+ *
+ * @param {string} text - The full response text to scan.
+ * @returns {Array<{kind: string, evidence: string}>}
+ */
+function detectInternalContradictions(text) {
+  const rawText = normalizeForScan(text);
+  const stripped = stripLowSignalRegions(rawText);
+  // Exclude questions and very short fragments — they rarely form meaningful pairs.
+  const sentences = splitIntoSentences(stripped).filter(
+    (s) => s.trim().length >= 12 && !s.trim().endsWith('?'),
+  );
+
+  if (sentences.length < 2) return [];
+
+  const negatedSentences = [];
+  const affirmativeSentences = [];
+
+  for (const sentence of sentences) {
+    if (NEGATION_POLARITY_RE.test(sentence)) {
+      negatedSentences.push(sentence);
+    } else {
+      affirmativeSentences.push(sentence);
+    }
+  }
+
+  for (const negSentence of negatedSentences) {
+    const strippedCore = stripNegationMarkers(negSentence);
+    const negTerms = extractSignificantTerms(strippedCore);
+    if (negTerms.length < 2) continue;
+    const negTermSet = new Set(negTerms);
+
+    for (const affSentence of affirmativeSentences) {
+      const affTerms = extractSignificantTerms(affSentence);
+      if (affTerms.length < 2) continue;
+      const shared = affTerms.filter((t) => negTermSet.has(t));
+      if (shared.length < 2) continue;
+      const unionSize = new Set([...negTerms, ...affTerms]).size;
+      if (unionSize > 0 && shared.length / unionSize >= 0.4) {
+        return [{ kind: 'internal_contradiction', evidence: shared.slice(0, 3).join(', ') }];
+      }
+    }
+  }
+
+  return [];
+}
+
 /**
  * Determine whether evidence-like tokens or inline code appear near a given index in the text.
  *
@@ -509,6 +731,12 @@ function findTriggerMatches(text) {
     if (isIndexWithinQuestion(haystack, edcMatch.index)) continue;
     matches.push({ kind: 'evaluative_design_claim', evidence: edcMatch[0].trim() });
   }
+
+  // 6) Internal contradiction detection via negation polarity heuristics.
+  // Operates on the full original text (not the pre-stripped haystack) so that
+  // sentence boundaries are preserved for accurate polarity pair comparison.
+  const contradictionMatches = detectInternalContradictions(text);
+  matches.push(...contradictionMatches);
 
   return matches;
 }
@@ -943,4 +1171,10 @@ module.exports = {
   // Structure-aware detection exports
   buildStructuralBlockReason,
   stripLabeledClaimLines,
+  // Internal contradiction detection exports
+  detectInternalContradictions,
+  extractSignificantTerms,
+  stripNegationMarkers,
+  stemWord,
+  NEGATION_POLARITY_RE,
 };
