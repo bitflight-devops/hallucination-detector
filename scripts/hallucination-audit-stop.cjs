@@ -244,273 +244,382 @@ function hasEnumerationNearby(text, idx) {
  * Detects linguistic signals that suggest uncertainty, causal claims, uncited quantification, completeness assertions, or evaluative-design statements in the provided text.
  *
  * @param {string} text - The text to scan for trigger patterns (typically an assistant message).
+ * @param {object} [config={}] - Optional config object (from loadConfig()).  Honoured fields:
+ *   - `config.categories.<name>.enabled` — skip the entire category when `false`.
+ *   - `config.categories.<name>.customPatterns` — `{ pattern, evidence }[]` added to (or replacing) built-ins.
+ *   - `config.categories.<name>.replacePatterns` — when `true`, customPatterns replaces built-ins.
+ *   - `config.allowlist` — array of strings/RegExps; any match whose evidence satisfies an entry is dropped.
+ *   - `config.maxTriggersPerResponse` — upper bound on the number of returned matches.
  * @returns {Array<{kind: string, evidence: string}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, or `evaluative_design_claim`, and `evidence` is the matched snippet from the text.
  */
-function findTriggerMatches(text) {
-  const matches = [];
+function findTriggerMatches(text, config = {}) {
+  const rawMatches = [];
   const rawText = normalizeForScan(text);
   const haystack = stripLowSignalRegions(rawText);
   const lower = haystack.toLowerCase();
 
-  // 1) Assumption/speculation language (explicitly discouraged by repo policy)
-  // Change 3: 'should be' removed from speculationPhrases; handled via regex below.
-  const speculationPhrases = [
-    'i think',
-    'i believe',
-    'probably',
-    'likely',
-    'it seems',
-    'seems like',
-    'i assume',
-    'assume',
-    'maybe',
-    'might be',
-    'could be',
-    'presumably',
-    'may',
-  ];
-  // Pronouns that precede "may" in permissive/instructional usage ("you may use").
-  const PERMISSIVE_MAY_PRONOUNS = new Set(['you', 'one', 'anyone', 'users', 'they', 'we']);
-  for (const phrase of speculationPhrases) {
-    const idx = lower.indexOf(phrase);
-    if (idx !== -1) {
-      // Questions like "Should I do that now?" are desirable—don't flag.
-      if (isIndexWithinQuestion(haystack, idx)) continue;
-      // Suppress permissive "may" when preceded by a permission-granting pronoun.
-      if (phrase === 'may') {
-        const before = lower.slice(0, idx).trimEnd();
-        const lastWord = before.slice(before.lastIndexOf(' ') + 1);
-        if (PERMISSIVE_MAY_PRONOUNS.has(lastWord)) continue;
+  const cats = config.categories && typeof config.categories === 'object' ? config.categories : {};
+
+  /** Returns true when `catName` is enabled (default: true). */
+  function isCategoryEnabled(catName) {
+    const cat = cats[catName];
+    return !cat || cat.enabled !== false;
+  }
+
+  /** Returns true when built-in patterns should run for `catName`. */
+  function useBuiltIn(catName) {
+    const cat = cats[catName];
+    return !cat || !cat.replacePatterns;
+  }
+
+  /**
+   * Run custom `{ pattern, evidence }` patterns for a category and push matches.
+   * `pattern` may be:
+   *   - A real RegExp object (from a `.cjs` config loaded via `require()`).
+   *   - A `/regex/flags`-style string (from JSON/TOML sources).
+   *   - A plain string (matched case-insensitively).
+   */
+  function runCustomPatterns(catName) {
+    const cat = cats[catName];
+    if (!cat || !Array.isArray(cat.customPatterns)) return;
+    for (const item of cat.customPatterns) {
+      if (!item || !item.pattern) continue;
+      const { pattern, evidence } = item;
+      let found = false;
+      if (pattern instanceof RegExp) {
+        // Real RegExp from a .cjs config — test directly against the haystack.
+        found = pattern.test(haystack);
+      } else if (typeof pattern === 'string' && pattern.startsWith('/')) {
+        // "/pattern/flags" string from JSON or TOML sources.
+        const lastSlash = pattern.lastIndexOf('/');
+        if (lastSlash > 0) {
+          try {
+            const re = new RegExp(pattern.slice(1, lastSlash), pattern.slice(lastSlash + 1) || 'i');
+            found = re.test(haystack);
+          } catch {
+            // invalid regex — skip
+          }
+        }
+      } else if (typeof pattern === 'string') {
+        found = lower.includes(pattern.toLowerCase());
       }
-      matches.push({ kind: 'speculation_language', evidence: phrase });
+      if (found) {
+        rawMatches.push({
+          kind: catName,
+          evidence: typeof evidence === 'string' ? evidence : String(pattern),
+        });
+      }
     }
   }
 
-  // Change 3: Three-way classification for 'should be'.
-  if (lower.includes('should be') || lower.includes('should')) {
-    // Allow: prescriptive (followed by a value/identifier/type literal, or a bare
-    // word identifier — handles the case where inline code was stripped by
-    // stripLowSignalRegions before the pattern runs)
-    const PRESCRIPTIVE_SHOULD =
-      /\bshould\s+be\s+(?:`[^`]+`|["'][^"']+["']|\d[\d.]*\b|(?:true|false|null|undefined|none|int|str|float|string|boolean|void)\b|(?:a|an|the)\s+\w[\w-]*|[\w][\w-]{1,})/i;
-    // Allow: hypothesis framing
-    const HYPOTHESIS_SHOULD =
-      /\b(?:H[0₀aA1₁]|hypothesis|null hypothesis|prediction)\b[^.]*\bshould\b/i;
-    // Allow: instructional ("you should set/use/configure")
-    const INSTRUCTIONAL_SHOULD =
-      /\byou\s+should\s+(?:set|configure|change|update|use|add|remove|ensure|verify|check)\b/i;
-    // Flag: epistemic ("it/this/that should be working/fixed/done")
-    // 'that' is split out: as a relative pronoun it follows a noun antecedent ("changes that
-    // should be reflected"), producing false positives. Only treat 'that should be' as epistemic
-    // when 'that' is sentence-initial (demonstrative pronoun: "That should be resolved.").
-    const EPISTEMIC_SUBJECT_SHOULD = /\b(?:it|this|everything|things?)\s+should\s+be\b/i;
-    const EPISTEMIC_THAT_SENTENCE_START = /(?:^|[.!?;]\s+)that\s+should\s+be\b/i;
+  // Convenience alias used throughout the existing detection blocks.
+  const matches = rawMatches;
 
-    // Epistemic check runs first — it is the most specific/dangerous signal.
-    if (EPISTEMIC_SUBJECT_SHOULD.test(haystack) || EPISTEMIC_THAT_SENTENCE_START.test(haystack)) {
-      matches.push({ kind: 'speculation_language', evidence: 'should be (epistemic)' });
-    } else if (HYPOTHESIS_SHOULD.test(haystack)) {
-      // suppressed — hypothesis framing
-    } else if (INSTRUCTIONAL_SHOULD.test(haystack)) {
-      // suppressed — instructional usage
-    } else if (PRESCRIPTIVE_SHOULD.test(haystack)) {
-      // suppressed — prescriptive usage (value/identifier/type follows, or code was stripped)
-    } else if (lower.includes('should be')) {
-      // Fallback: apply question check on first occurrence
-      const idx = lower.indexOf('should be');
-      if (!isIndexWithinQuestion(haystack, idx)) {
-        matches.push({ kind: 'speculation_language', evidence: 'should be' });
+  // 1) Assumption/speculation language (explicitly discouraged by repo policy)
+  if (isCategoryEnabled('speculation_language')) {
+    if (useBuiltIn('speculation_language')) {
+      // Change 3: 'should be' removed from speculationPhrases; handled via regex below.
+      const speculationPhrases = [
+        'i think',
+        'i believe',
+        'probably',
+        'likely',
+        'it seems',
+        'seems like',
+        'i assume',
+        'assume',
+        'maybe',
+        'might be',
+        'could be',
+        'presumably',
+        'may',
+      ];
+      // Pronouns that precede "may" in permissive/instructional usage ("you may use").
+      const PERMISSIVE_MAY_PRONOUNS = new Set(['you', 'one', 'anyone', 'users', 'they', 'we']);
+      for (const phrase of speculationPhrases) {
+        const idx = lower.indexOf(phrase);
+        if (idx !== -1) {
+          // Questions like "Should I do that now?" are desirable—don't flag.
+          if (isIndexWithinQuestion(haystack, idx)) continue;
+          // Suppress permissive "may" when preceded by a permission-granting pronoun.
+          if (phrase === 'may') {
+            const before = lower.slice(0, idx).trimEnd();
+            const lastWord = before.slice(before.lastIndexOf(' ') + 1);
+            if (PERMISSIVE_MAY_PRONOUNS.has(lastWord)) continue;
+          }
+          matches.push({ kind: 'speculation_language', evidence: phrase });
+        }
+      }
+
+      // Change 3: Three-way classification for 'should be'.
+      if (lower.includes('should be') || lower.includes('should')) {
+        // Allow: prescriptive (followed by a value/identifier/type literal, or a bare
+        // word identifier — handles the case where inline code was stripped by
+        // stripLowSignalRegions before the pattern runs)
+        const PRESCRIPTIVE_SHOULD =
+          /\bshould\s+be\s+(?:`[^`]+`|["'][^"']+["']|\d[\d.]*\b|(?:true|false|null|undefined|none|int|str|float|string|boolean|void)\b|(?:a|an|the)\s+\w[\w-]*|[\w][\w-]{1,})/i;
+        // Allow: hypothesis framing
+        const HYPOTHESIS_SHOULD =
+          /\b(?:H[0₀aA1₁]|hypothesis|null hypothesis|prediction)\b[^.]*\bshould\b/i;
+        // Allow: instructional ("you should set/use/configure")
+        const INSTRUCTIONAL_SHOULD =
+          /\byou\s+should\s+(?:set|configure|change|update|use|add|remove|ensure|verify|check)\b/i;
+        // Flag: epistemic ("it/this/that should be working/fixed/done")
+        // 'that' is split out: as a relative pronoun it follows a noun antecedent ("changes that
+        // should be reflected"), producing false positives. Only treat 'that should be' as epistemic
+        // when 'that' is sentence-initial (demonstrative pronoun: "That should be resolved.").
+        const EPISTEMIC_SUBJECT_SHOULD = /\b(?:it|this|everything|things?)\s+should\s+be\b/i;
+        const EPISTEMIC_THAT_SENTENCE_START = /(?:^|[.!?;]\s+)that\s+should\s+be\b/i;
+
+        // Epistemic check runs first — it is the most specific/dangerous signal.
+        if (
+          EPISTEMIC_SUBJECT_SHOULD.test(haystack) ||
+          EPISTEMIC_THAT_SENTENCE_START.test(haystack)
+        ) {
+          matches.push({ kind: 'speculation_language', evidence: 'should be (epistemic)' });
+        } else if (HYPOTHESIS_SHOULD.test(haystack)) {
+          // suppressed — hypothesis framing
+        } else if (INSTRUCTIONAL_SHOULD.test(haystack)) {
+          // suppressed — instructional usage
+        } else if (PRESCRIPTIVE_SHOULD.test(haystack)) {
+          // suppressed — prescriptive usage (value/identifier/type follows, or code was stripped)
+        } else if (lower.includes('should be')) {
+          // Fallback: apply question check on first occurrence
+          const idx = lower.indexOf('should be');
+          if (!isIndexWithinQuestion(haystack, idx)) {
+            matches.push({ kind: 'speculation_language', evidence: 'should be' });
+          }
+        }
       }
     }
+    runCustomPatterns('speculation_language');
   }
 
   // 2) Hard causality claims (heuristic trigger): require evidence wording when asserting causality.
   // Change 2 & 6: Expanded phrase list + evidence suppression.
+  if (isCategoryEnabled('causality_language')) {
+    if (useBuiltIn('causality_language')) {
+      // Temporal 'since' exclusion (Change 6)
+      const TEMPORAL_SINCE =
+        /\bsince\s+(?:last\s+)?(?:yesterday|today|then|\d{4}|\d{1,2}[/-]\d{1,2}|\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\s+ago|the\s+(?:beginning|start|end)|version\s+\d)/i;
 
-  // Temporal 'since' exclusion (Change 6)
-  const TEMPORAL_SINCE =
-    /\bsince\s+(?:last\s+)?(?:yesterday|today|then|\d{4}|\d{1,2}[/-]\d{1,2}|\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\s+ago|the\s+(?:beginning|start|end)|version\s+\d)/i;
+      // Hedged-because pattern (Change 2)
+      const HEDGED_BECAUSE =
+        /\b(?:probably|likely|possibly|perhaps|maybe|might\s+be|could\s+be)\s+because\b/i;
 
-  // Hedged-because pattern (Change 2)
-  const HEDGED_BECAUSE =
-    /\b(?:probably|likely|possibly|perhaps|maybe|might\s+be|could\s+be)\s+because\b/i;
+      const causalityPhrases = [
+        'caused by',
+        'due to',
+        'because',
+        'as a result',
+        'therefore',
+        'this means',
+        // Change 6 additions
+        'consequently',
+        'as a consequence',
+        'hence',
+        'thus',
+        'it follows that',
+        'this suggests that',
+        'this indicates that',
+        'this implies that',
+        'which is why',
+        'which means',
+        'which explains',
+        'the root cause',
+        'stems from',
+        'results from',
+        'resulted in',
+        'led to',
+        'attributable to',
+        'given that',
+        'since',
+      ];
 
-  const causalityPhrases = [
-    'caused by',
-    'due to',
-    'because',
-    'as a result',
-    'therefore',
-    'this means',
-    // Change 6 additions
-    'consequently',
-    'as a consequence',
-    'hence',
-    'thus',
-    'it follows that',
-    'this suggests that',
-    'this indicates that',
-    'this implies that',
-    'which is why',
-    'which means',
-    'which explains',
-    'the root cause',
-    'stems from',
-    'results from',
-    'resulted in',
-    'led to',
-    'attributable to',
-    'given that',
-    'since',
-  ];
+      for (const phrase of causalityPhrases) {
+        // Scan all occurrences of the phrase, not just the first
+        let searchFrom = 0;
+        while (true) {
+          const idx = lower.indexOf(phrase, searchFrom);
+          if (idx === -1) break;
+          searchFrom = idx + phrase.length;
 
-  for (const phrase of causalityPhrases) {
-    // Scan all occurrences of the phrase, not just the first
-    let searchFrom = 0;
-    while (true) {
-      const idx = lower.indexOf(phrase, searchFrom);
-      if (idx === -1) break;
-      searchFrom = idx + phrase.length;
+          if (isIndexWithinQuestion(haystack, idx)) continue;
 
-      if (isIndexWithinQuestion(haystack, idx)) continue;
+          // Temporal exclusion for 'since'
+          if (phrase === 'since') {
+            const nearby = haystack.slice(
+              Math.max(0, idx - 50),
+              Math.min(haystack.length, idx + 100),
+            );
+            if (TEMPORAL_SINCE.test(nearby)) continue;
+          }
 
-      // Temporal exclusion for 'since'
-      if (phrase === 'since') {
-        const nearby = haystack.slice(Math.max(0, idx - 50), Math.min(haystack.length, idx + 100));
-        if (TEMPORAL_SINCE.test(nearby)) continue;
-      }
+          if (phrase === 'because') {
+            // Hedged because: always flag regardless of evidence
+            if (HEDGED_BECAUSE.test(haystack)) {
+              matches.push({ kind: 'causality_language', evidence: 'because (hedged)' });
+              break; // one flag per hedged-because pattern is sufficient
+            }
+            // Evidence nearby suppresses plain 'because'
+            if (hasEvidenceNearby(haystack, idx, rawText)) continue;
+            matches.push({ kind: 'causality_language', evidence: phrase });
+            continue;
+          }
 
-      if (phrase === 'because') {
-        // Hedged because: always flag regardless of evidence
-        if (HEDGED_BECAUSE.test(haystack)) {
-          matches.push({ kind: 'causality_language', evidence: 'because (hedged)' });
-          break; // one flag per hedged-because pattern is sufficient
+          // All other causality phrases: suppress when evidence is nearby
+          if (hasEvidenceNearby(haystack, idx, rawText)) continue;
+          matches.push({ kind: 'causality_language', evidence: phrase });
+          break; // one flag per phrase kind is sufficient for non-because phrases
         }
-        // Evidence nearby suppresses plain 'because'
-        if (hasEvidenceNearby(haystack, idx, rawText)) continue;
-        matches.push({ kind: 'causality_language', evidence: phrase });
-        continue;
       }
 
-      // All other causality phrases: suppress when evidence is nearby
-      if (hasEvidenceNearby(haystack, idx, rawText)) continue;
-      matches.push({ kind: 'causality_language', evidence: phrase });
-      break; // one flag per phrase kind is sufficient for non-because phrases
+      // Change 7: Implicit, nominalized, and passive causality patterns.
+      const IMPLICIT_CAUSALITY = [
+        /\.\s+This\s+(?:made|caused|meant|led\s+to|resulted\s+in|explains?\s+why|is\s+(?:why|because))\b/i,
+        /\.\s+That(?:'s|\s+is)\s+(?:why|because|the\s+reason)\b/i,
+      ];
+      const NOMINALIZED_CAUSALITY = [
+        /\bthe\s+(?:likely|probable|possible|main|primary|underlying)\s+(?:cause|reason|explanation)\b/i,
+        /\bthe\s+(?:cause|reason|explanation|root\s+cause)\s+(?:of|for|behind)\s+(?:this|that|the)\b/i,
+      ];
+      const PASSIVE_CAUSALITY = [
+        /\bwas\s+(?:caused|triggered|produced)\s+by\b/i,
+        /\bresulted\s+(?:from|in)\b/i,
+        /\bcan\s+be\s+traced\s+(?:back\s+)?to\b/i,
+      ];
+
+      for (const re of [...IMPLICIT_CAUSALITY, ...NOMINALIZED_CAUSALITY, ...PASSIVE_CAUSALITY]) {
+        const m = haystack.match(re);
+        if (!m) continue;
+        if (isIndexWithinQuestion(haystack, m.index)) continue;
+        if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
+        matches.push({ kind: 'causality_language', evidence: m[0].trim() });
+      }
     }
-  }
-
-  // Change 7: Implicit, nominalized, and passive causality patterns.
-  const IMPLICIT_CAUSALITY = [
-    /\.\s+This\s+(?:made|caused|meant|led\s+to|resulted\s+in|explains?\s+why|is\s+(?:why|because))\b/i,
-    /\.\s+That(?:'s|\s+is)\s+(?:why|because|the\s+reason)\b/i,
-  ];
-  const NOMINALIZED_CAUSALITY = [
-    /\bthe\s+(?:likely|probable|possible|main|primary|underlying)\s+(?:cause|reason|explanation)\b/i,
-    /\bthe\s+(?:cause|reason|explanation|root\s+cause)\s+(?:of|for|behind)\s+(?:this|that|the)\b/i,
-  ];
-  const PASSIVE_CAUSALITY = [
-    /\bwas\s+(?:caused|triggered|produced)\s+by\b/i,
-    /\bresulted\s+(?:from|in)\b/i,
-    /\bcan\s+be\s+traced\s+(?:back\s+)?to\b/i,
-  ];
-
-  for (const re of [...IMPLICIT_CAUSALITY, ...NOMINALIZED_CAUSALITY, ...PASSIVE_CAUSALITY]) {
-    const m = haystack.match(re);
-    if (!m) continue;
-    if (isIndexWithinQuestion(haystack, m.index)) continue;
-    if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
-    matches.push({ kind: 'causality_language', evidence: m[0].trim() });
+    runCustomPatterns('causality_language');
   }
 
   // 3) Fake rigor / uncited quantification
   // Change 4: isQualityScore replaces the raw N/10 regex.
-  const nOverTenRe = /\b(\d+(?:\.\d+)?)\s*\/\s*10\b/i;
-  const m10 = haystack.match(nOverTenRe);
-  if (m10 && isQualityScore(haystack, m10[0], m10.index)) {
-    matches.push({ kind: 'pseudo_quantification', evidence: m10[0] });
-  }
+  if (isCategoryEnabled('pseudo_quantification')) {
+    if (useBuiltIn('pseudo_quantification')) {
+      const nOverTenRe = /\b(\d+(?:\.\d+)?)\s*\/\s*10\b/i;
+      const m10 = haystack.match(nOverTenRe);
+      if (m10 && isQualityScore(haystack, m10[0], m10.index)) {
+        matches.push({ kind: 'pseudo_quantification', evidence: m10[0] });
+      }
 
-  const percentRe = /\b\d{1,3}(?:\.\d+)?\s*%\b/i;
-  const mp = haystack.match(percentRe);
-  if (mp) {
-    matches.push({ kind: 'pseudo_quantification', evidence: mp[0] });
+      const percentRe = /\b\d{1,3}(?:\.\d+)?\s*%\b/i;
+      const mp = haystack.match(percentRe);
+      if (mp) {
+        matches.push({ kind: 'pseudo_quantification', evidence: mp[0] });
+      }
+    }
+    runCustomPatterns('pseudo_quantification');
   }
 
   // 4) Over-claiming completeness (must be backed by explicit actions/observations)
   // Change 5: Expanded phrase list + structural regex patterns.
-  const completenessPhrases = [
-    // Original phrases
-    'all files checked',
-    'comprehensive analysis',
-    'everything is fixed',
-    'fully resolved',
-    'complete solution',
-    // Expanded phrases
-    'all issues resolved',
-    'all issues fixed',
-    'all tests pass',
-    'all tests passing',
-    'no issues found',
-    'no errors found',
-    'no remaining issues',
-    'no remaining errors',
-    'task is complete',
-    'task is done',
-    'fully implemented',
-    'fully complete',
-    'fully functional',
-    'completely resolved',
-    'completely fixed',
-    'completely done',
-    'all done',
-    'all complete',
-    'all fixed',
-    'all resolved',
-    'entirely resolved',
-    'entirely fixed',
-    'nothing else to fix',
-    'nothing else to do',
-    'everything works',
-    'everything is working',
-  ];
+  if (isCategoryEnabled('completeness_claim')) {
+    if (useBuiltIn('completeness_claim')) {
+      const completenessPhrases = [
+        // Original phrases
+        'all files checked',
+        'comprehensive analysis',
+        'everything is fixed',
+        'fully resolved',
+        'complete solution',
+        // Expanded phrases
+        'all issues resolved',
+        'all issues fixed',
+        'all tests pass',
+        'all tests passing',
+        'no issues found',
+        'no errors found',
+        'no remaining issues',
+        'no remaining errors',
+        'task is complete',
+        'task is done',
+        'fully implemented',
+        'fully complete',
+        'fully functional',
+        'completely resolved',
+        'completely fixed',
+        'completely done',
+        'all done',
+        'all complete',
+        'all fixed',
+        'all resolved',
+        'entirely resolved',
+        'entirely fixed',
+        'nothing else to fix',
+        'nothing else to do',
+        'everything works',
+        'everything is working',
+      ];
 
-  for (const phrase of completenessPhrases) {
-    const idx = lower.indexOf(phrase);
-    if (idx !== -1) {
-      matches.push({ kind: 'completeness_claim', evidence: phrase });
+      for (const phrase of completenessPhrases) {
+        const idx = lower.indexOf(phrase);
+        if (idx !== -1) {
+          matches.push({ kind: 'completeness_claim', evidence: phrase });
+        }
+      }
+
+      // Structural completeness regex patterns (Change 5)
+      const completenessRegexes = [
+        /\ball\s+\w+\s+have\s+been\s+(?:fixed|resolved|updated|added|removed|checked|verified|addressed|handled|processed|completed)\b/i,
+        /\bno\s+remaining\s+\w+\b/i,
+        /\b(?:fully|completely)\s+\w+(?:ed|d)\b/i,
+        /\beverything\s+(?:is|has\s+been)\s+\w+\b/i,
+        /\ball\s+(?:of\s+)?(?:the\s+)?\w+\s+(?:are|is)\s+now\s+\w+\b/i,
+      ];
+
+      for (const re of completenessRegexes) {
+        const m = haystack.match(re);
+        if (!m) continue;
+        if (isIndexWithinQuestion(haystack, m.index)) continue;
+        // Suppress when inside an enumeration list (Change 5)
+        if (hasEnumerationNearby(haystack, m.index)) continue;
+        matches.push({ kind: 'completeness_claim', evidence: m[0].trim() });
+      }
     }
-  }
-
-  // Structural completeness regex patterns (Change 5)
-  const completenessRegexes = [
-    /\ball\s+\w+\s+have\s+been\s+(?:fixed|resolved|updated|added|removed|checked|verified|addressed|handled|processed|completed)\b/i,
-    /\bno\s+remaining\s+\w+\b/i,
-    /\b(?:fully|completely)\s+\w+(?:ed|d)\b/i,
-    /\beverything\s+(?:is|has\s+been)\s+\w+\b/i,
-    /\ball\s+(?:of\s+)?(?:the\s+)?\w+\s+(?:are|is)\s+now\s+\w+\b/i,
-  ];
-
-  for (const re of completenessRegexes) {
-    const m = haystack.match(re);
-    if (!m) continue;
-    if (isIndexWithinQuestion(haystack, m.index)) continue;
-    // Suppress when inside an enumeration list (Change 5)
-    if (hasEnumerationNearby(haystack, m.index)) continue;
-    matches.push({ kind: 'completeness_claim', evidence: m[0].trim() });
+    runCustomPatterns('completeness_claim');
   }
 
   // 5) Evaluative design claims — exact tell phrases only; no broad terms.
   // These phrases assert a conclusion ("cleanest", "simplest", "obvious") on a
   // proposed change without evidence. The regex canary fires on exact multi-word
   // phrases with near-zero false-positive risk.
-  // Reset lastIndex before matchAll() — module-scope `g`-flagged regexes retain state.
-  EVALUATIVE_DESIGN_TELLS_GLOBAL.lastIndex = 0;
-  for (const edcMatch of haystack.matchAll(EVALUATIVE_DESIGN_TELLS_GLOBAL)) {
-    if (isIndexWithinQuestion(haystack, edcMatch.index)) continue;
-    matches.push({ kind: 'evaluative_design_claim', evidence: edcMatch[0].trim() });
+  if (isCategoryEnabled('evaluative_design_claim')) {
+    if (useBuiltIn('evaluative_design_claim')) {
+      // Reset lastIndex before matchAll() — module-scope `g`-flagged regexes retain state.
+      EVALUATIVE_DESIGN_TELLS_GLOBAL.lastIndex = 0;
+      for (const edcMatch of haystack.matchAll(EVALUATIVE_DESIGN_TELLS_GLOBAL)) {
+        if (isIndexWithinQuestion(haystack, edcMatch.index)) continue;
+        matches.push({ kind: 'evaluative_design_claim', evidence: edcMatch[0].trim() });
+      }
+    }
+    runCustomPatterns('evaluative_design_claim');
   }
 
-  return matches;
+  // Apply allowlist filter and maxTriggersPerResponse limit.
+  const allowlist = Array.isArray(config.allowlist) ? config.allowlist : [];
+  const maxTriggers =
+    Number.isFinite(config.maxTriggersPerResponse) && config.maxTriggersPerResponse >= 0
+      ? config.maxTriggersPerResponse
+      : 20;
+
+  const result = [];
+  for (const m of rawMatches) {
+    if (result.length >= maxTriggers) break;
+    const blocked = allowlist.some((item) => {
+      if (item instanceof RegExp) return item.test(m.evidence);
+      return typeof item === 'string' && m.evidence.includes(item);
+    });
+    if (!blocked) result.push(m);
+  }
+  return result;
 }
 
 // =============================================================================
@@ -851,7 +960,7 @@ function main() {
     // Structured + valid: run trigger audit on text with labeled claim lines stripped
     // so acknowledged typed claims don't re-fire speculation/causality detectors.
     const strippedText = stripLabeledClaimLines(lastAssistantText);
-    const matches = findTriggerMatches(strippedText);
+    const matches = findTriggerMatches(strippedText, config);
 
     if (matches.length === 0) {
       const { statePath } = loadLoopState(sessionId);
@@ -863,7 +972,7 @@ function main() {
   }
 
   // Unstructured response: run existing trigger audit unchanged.
-  const matches = findTriggerMatches(lastAssistantText);
+  const matches = findTriggerMatches(lastAssistantText, config);
 
   if (config.introspect) {
     // Introspection mode: log everything, never block.
