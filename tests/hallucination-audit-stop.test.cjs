@@ -21,6 +21,10 @@ const {
   DEFAULT_WEIGHTS,
   stripLabeledClaimLines,
   buildStructuralBlockReason,
+  detectInternalContradictions,
+  extractSignificantTerms,
+  stripNegationMarkers,
+  stemWord,
 } = require('../scripts/hallucination-audit-stop.cjs');
 
 const SCRIPT_PATH = path.resolve(__dirname, '../scripts/hallucination-audit-stop.cjs');
@@ -560,6 +564,7 @@ describe('aggregateWeightedScore', () => {
       pseudo_quantification: 1,
       completeness_claim: 1,
       evaluative_design_claim: 1,
+      internal_contradiction: 1,
     };
     expect(aggregateWeightedScore(scores, DEFAULT_WEIGHTS)).toBe(1);
   });
@@ -571,11 +576,12 @@ describe('aggregateWeightedScore', () => {
       pseudo_quantification: 0,
       completeness_claim: 0,
       evaluative_design_claim: 0,
+      internal_contradiction: 0,
     };
-    // speculation weight = 0.25, weightSum = 1.3 (fabricated_source removed, evaluative_design_claim: 0.4)
-    // result = 0.25 / 1.3 ≈ 0.19231
+    // speculation weight = 0.25, weightSum = 1.65 (0.25+0.3+0.15+0.2+0.4+0.35)
+    // result = 0.25 / 1.65 ≈ 0.15152
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    const expected = 0.25 / 1.3;
+    const expected = 0.25 / 1.65;
     expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
@@ -589,8 +595,8 @@ describe('aggregateWeightedScore', () => {
   it('handles missing score keys as 0', () => {
     const scores = { speculation_language: 1 };
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    // Only speculation fires: 0.25 / 1.3 ≈ 0.19231 (weightSum = 1.3; fabricated_source removed)
-    const expected = 0.25 / 1.3;
+    // Only speculation fires: 0.25 / 1.65 ≈ 0.15152 (weightSum = 1.65)
+    const expected = 0.25 / 1.65;
     expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
@@ -815,6 +821,168 @@ describe('evaluative_design_claim', () => {
 });
 
 // =============================================================================
+// Internal contradiction detection (negation polarity heuristics)
+// =============================================================================
+describe('internal_contradiction', () => {
+  // --- stemWord ---
+  it('stemWord: removes -ing suffix for words > 6 chars', () => {
+    // "passing" = "pass" + "ing" → "pass" (no doubled consonant added)
+    expect(stemWord('passing')).toBe('pass');
+    expect(stemWord('failing')).toBe('fail');
+    // "running" = "run" + "n" + "ing" → strip -ing gives "runn" (doubled n retained by heuristic)
+    expect(stemWord('running')).toBe('runn');
+  });
+
+  it('stemWord: removes -es suffix for words > 5 chars', () => {
+    expect(stemWord('passes')).toBe('pass');
+    expect(stemWord('classes')).toBe('class');
+  });
+
+  it('stemWord: removes -ed suffix for words > 5 chars', () => {
+    expect(stemWord('failed')).toBe('fail');
+    expect(stemWord('passed')).toBe('pass');
+  });
+
+  it('stemWord: removes -s suffix for words > 4 chars', () => {
+    expect(stemWord('works')).toBe('work');
+    expect(stemWord('tests')).toBe('test');
+  });
+
+  it('stemWord: does not over-strip short words', () => {
+    expect(stemWord('run')).toBe('run');
+    expect(stemWord('bug')).toBe('bug');
+    expect(stemWord('fix')).toBe('fix');
+  });
+
+  // --- extractSignificantTerms ---
+  it('extractSignificantTerms: filters stop words and applies stemming', () => {
+    const terms = extractSignificantTerms('The tests are passing correctly');
+    expect(terms).toContain('test');
+    expect(terms).toContain('pass');
+    // 'correctly' is not stripped by the suffix rules (no -ing/-es/-ed/-s match),
+    // so it remains as-is in the term list
+    expect(terms).toContain('correctly');
+    // stop words removed
+    expect(terms).not.toContain('the');
+    expect(terms).not.toContain('are');
+  });
+
+  it('extractSignificantTerms: filters words shorter than 3 characters', () => {
+    const terms = extractSignificantTerms('It is OK to run');
+    // 'it', 'is', 'ok' (2 chars) filtered; 'run' kept
+    expect(terms).toContain('run');
+    expect(terms).not.toContain('ok');
+  });
+
+  // --- stripNegationMarkers ---
+  it('stripNegationMarkers: removes "not"', () => {
+    expect(stripNegationMarkers('The test does not pass')).toBe('The test does pass');
+  });
+
+  it('stripNegationMarkers: removes contractions like "doesn\'t"', () => {
+    expect(stripNegationMarkers("The server doesn't run")).toBe('The server run');
+  });
+
+  it('stripNegationMarkers: removes "never"', () => {
+    expect(stripNegationMarkers('The hook never fires')).toBe('The hook fires');
+  });
+
+  it('stripNegationMarkers: removes "cannot"', () => {
+    expect(stripNegationMarkers('The user cannot proceed')).toBe('The user proceed');
+  });
+
+  // --- detectInternalContradictions ---
+  it('flags a direct negation contradiction: "X works" vs "X does not work"', () => {
+    const text = 'The feature works correctly. The feature does not work correctly.';
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches[0].kind).toBe('internal_contradiction');
+  });
+
+  it('flags: "The server is running" vs "The server is not running"', () => {
+    const text = 'The server is running smoothly. The server is not running at all.';
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches[0].kind).toBe('internal_contradiction');
+  });
+
+  it('flags via findTriggerMatches: contradiction fires internal_contradiction kind', () => {
+    const text = 'The test passes. The test does not pass.';
+    const matches = findTriggerMatches(text);
+    const kinds = matches.map((m) => m.kind);
+    expect(kinds).toContain('internal_contradiction');
+  });
+
+  it('does not flag a single sentence (no pair to compare)', () => {
+    const text = 'The feature works correctly.';
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBe(0);
+  });
+
+  it('does not flag when only negated sentences exist (no affirmative partner)', () => {
+    const text = "The feature doesn't work. The build doesn't pass. The server isn't running.";
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBe(0);
+  });
+
+  it('does not flag when only affirmative sentences exist (no negation)', () => {
+    const text = 'The feature works. The build passes. The server runs fine.';
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBe(0);
+  });
+
+  it('does not flag unrelated negation (low Jaccard similarity after stripping)', () => {
+    // The negated sentence is about authentication; the affirmative is about a different topic.
+    const text =
+      'The server responds correctly with the expected payload. The build system does not require authentication.';
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBe(0);
+  });
+
+  it('does not flag question sentences', () => {
+    // "Does the server run?" ends with '?' and is excluded from comparison.
+    const text = 'Does the server run? The server does not run right now.';
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBe(0);
+  });
+
+  it('does not flag very short sentences (< 12 chars)', () => {
+    const text = 'OK. Not OK.';
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBe(0);
+  });
+
+  it('does not flag text inside code blocks (stripped before comparison)', () => {
+    const text = [
+      '```',
+      'function works() { return true; }',
+      'function doesNotWork() { return false; }',
+      '```',
+      'The implementation is complete.',
+    ].join('\n');
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBe(0);
+  });
+
+  it('evidence field contains shared terms', () => {
+    const text =
+      'The authentication module works as expected. The authentication module does not work as expected.';
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBeGreaterThan(0);
+    // evidence should list stemmed shared terms (e.g. "authentication", "module", "work")
+    const evidence = matches[0].evidence;
+    expect(typeof evidence).toBe('string');
+    expect(evidence.length).toBeGreaterThan(0);
+    // at least one of the expected stemmed shared terms should appear in evidence
+    const hasExpectedTerm =
+      evidence.includes('authentication') ||
+      evidence.includes('module') ||
+      evidence.includes('work');
+    expect(hasExpectedTerm).toBe(true);
+  });
+});
+
+// =============================================================================
 // Self-trigger loop regression: block reason must not re-trigger findTriggerMatches
 // =============================================================================
 describe('block reason self-trigger regression', () => {
@@ -975,17 +1143,22 @@ describe('block reason self-trigger regression', () => {
 // DEFAULT_WEIGHTS
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
-  it('contains all five detection categories including evaluative_design_claim', () => {
+  it('contains all detection categories including evaluative_design_claim and internal_contradiction', () => {
     expect(DEFAULT_WEIGHTS).toHaveProperty('speculation_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('causality_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('pseudo_quantification');
     expect(DEFAULT_WEIGHTS).toHaveProperty('completeness_claim');
     expect(DEFAULT_WEIGHTS).toHaveProperty('evaluative_design_claim');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('internal_contradiction');
     expect(DEFAULT_WEIGHTS).not.toHaveProperty('fabricated_source');
   });
 
   it('evaluative_design_claim weight is 0.4', () => {
     expect(DEFAULT_WEIGHTS.evaluative_design_claim).toBe(0.4);
+  });
+
+  it('internal_contradiction weight is 0.35', () => {
+    expect(DEFAULT_WEIGHTS.internal_contradiction).toBe(0.35);
   });
 });
 
