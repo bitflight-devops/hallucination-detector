@@ -20,7 +20,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { loadConfig, loadWeights, DEFAULT_WEIGHTS } = require('./hallucination-config.cjs');
+const {
+  loadConfig,
+  loadWeights,
+  DEFAULT_WEIGHTS,
+  DEFAULT_THRESHOLDS,
+} = require('./hallucination-config.cjs');
 const {
   validateClaimStructure,
   CLAIM_LABEL_ALTERNATION,
@@ -578,13 +583,26 @@ function aggregateWeightedScore(scores, weights) {
 
 /**
  * Map an aggregate score to a three-tier label.
- *   GROUNDED     : score < 0.30
- *   UNCERTAIN    : 0.30 <= score <= 0.60
- *   HALLUCINATED : score > 0.60
+ *
+ * Default boundaries (override via optional `thresholds` parameter):
+ *   GROUNDED     : score < thresholds.uncertain   (default 0.30)
+ *   UNCERTAIN    : thresholds.uncertain <= score <= thresholds.hallucinated  (default 0.60)
+ *   HALLUCINATED : score > thresholds.hallucinated
+ *
+ * @param {number} score - Aggregate score in [0, 1].
+ * @param {{ uncertain?: number, hallucinated?: number }} [thresholds] - Optional threshold overrides.
+ * @returns {'GROUNDED'|'UNCERTAIN'|'HALLUCINATED'}
  */
-function getLabelForScore(score) {
-  if (score < 0.3) return 'GROUNDED';
-  if (score <= 0.6) return 'UNCERTAIN';
+function getLabelForScore(score, thresholds) {
+  const t = thresholds && typeof thresholds === 'object' ? thresholds : DEFAULT_THRESHOLDS;
+  const uncertain =
+    Number.isFinite(t.uncertain) && t.uncertain >= 0 ? t.uncertain : DEFAULT_THRESHOLDS.uncertain;
+  const hallucinated =
+    Number.isFinite(t.hallucinated) && t.hallucinated >= 0
+      ? t.hallucinated
+      : DEFAULT_THRESHOLDS.hallucinated;
+  if (score < uncertain) return 'GROUNDED';
+  if (score <= hallucinated) return 'UNCERTAIN';
   return 'HALLUCINATED';
 }
 
@@ -595,16 +613,17 @@ function getLabelForScore(score) {
  * Returns an array of per-sentence result objects:
  *   { sentence, index, total, scores, aggregateScore, label }
  *
- * @param {string} text     - Input text to analyze.
- * @param {object} [weights] - Optional weight overrides (defaults to DEFAULT_WEIGHTS).
+ * @param {string} text      - Input text to analyze.
+ * @param {object} [weights]   - Optional weight overrides (defaults to DEFAULT_WEIGHTS).
+ * @param {object} [thresholds] - Optional threshold overrides (defaults to DEFAULT_THRESHOLDS).
  */
-function scoreText(text, weights) {
+function scoreText(text, weights, thresholds) {
   const sentences = splitIntoSentences(text);
   const total = sentences.length;
   return sentences.map((sentence, index) => {
     const scores = scoreSentence(sentence);
     const aggregateScore = aggregateWeightedScore(scores, weights);
-    const label = getLabelForScore(aggregateScore);
+    const label = getLabelForScore(aggregateScore, thresholds);
     return { sentence, index, total, scores, aggregateScore, label };
   });
 }
@@ -779,20 +798,57 @@ function buildStructuralBlockReason(errors) {
 /**
  * Constructs a human-readable block reason from detected trigger matches.
  *
+ * When `sentenceScores` is provided, sentences labeled UNCERTAIN or HALLUCINATED
+ * are listed in a "Sentence-level analysis" section so the caller can identify
+ * exactly which sentence carries the highest hallucination risk
+ * (e.g., "sentence 3 of 7 [HALLUCINATED]").
+ *
+ * Sentence snippets are wrapped in backtick inline-code spans so that
+ * `stripLowSignalRegions` removes them on any subsequent scan, preventing
+ * the block reason itself from re-triggering the hook.
+ *
  * @param {Array<{kind: string, evidence: string}>} matches - Array of match objects; each must have a `kind` label and an `evidence` snippet used in the reason.
+ * @param {Array<{sentence: string, index: number, total: number, aggregateScore: number, label: string}>} [sentenceScores] - Optional per-sentence scoring results from `scoreText()`.
  * @returns {string} A formatted block reason string suitable for the STOP hook output.
  */
-function buildBlockReason(matches) {
+function buildBlockReason(matches, sentenceScores) {
   const uniqueKinds = [...new Set(matches.map((m) => m.kind))];
   const evidenceSnippets = matches
     .slice(0, 6)
     .map((m) => `- ${m.kind}: \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``)
     .join('\n');
-  return [
+
+  const lines = [
     BLOCK_HEADER,
     '',
     'Detected trigger language in your last assistant message:',
     evidenceSnippets || '- (no snippets available)',
+  ];
+
+  // Sentence-level section: list UNCERTAIN and HALLUCINATED sentences so the
+  // caller knows exactly which sentence(s) carry the highest risk.
+  if (Array.isArray(sentenceScores) && sentenceScores.length > 0) {
+    const flagged = sentenceScores.filter(
+      (r) => r.label === 'UNCERTAIN' || r.label === 'HALLUCINATED',
+    );
+    if (flagged.length > 0) {
+      lines.push('');
+      lines.push('Sentence-level analysis:');
+      for (const r of flagged) {
+        // Truncate and sanitize the snippet so it stays on one line inside a
+        // backtick span (inline code is stripped by stripLowSignalRegions on
+        // the next pass, preventing re-triggering).
+        const raw = r.sentence.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+        const snippet = raw.replace(/`/g, "'").slice(0, 60);
+        const ellipsis = raw.length > 60 ? '...' : '';
+        lines.push(
+          `- sentence ${r.index + 1} of ${r.total} [${r.label}]: \`${snippet}${ellipsis}\``,
+        );
+      }
+    }
+  }
+
+  lines.push(
     '',
     'Rewrite the response to follow these rules:',
     '- Only state actions you actually took and what you actually observed.',
@@ -803,7 +859,9 @@ function buildBlockReason(matches) {
     '- If an evaluative label (`cleanest`, `simplest`, `obvious`) appears on a proposed change: state what the changed component protects when functioning correctly before proposing to change it.',
     '',
     `Kinds flagged: ${uniqueKinds.join(', ')}`,
-  ].join('\n');
+  );
+
+  return lines.join('\n');
 }
 
 /**
@@ -859,7 +917,12 @@ function main() {
       process.exit(0);
     }
 
-    blockAndExit(sessionId, stopHookActive, buildBlockReason(matches));
+    const structuredSentenceScores = scoreText(
+      lastAssistantText,
+      config.weights,
+      config.thresholds,
+    );
+    blockAndExit(sessionId, stopHookActive, buildBlockReason(matches, structuredSentenceScores));
   }
 
   // Unstructured response: run existing trigger audit unchanged.
@@ -877,7 +940,7 @@ function main() {
       path.join(os.tmpdir(), 'hallucination-detector-introspect.jsonl');
 
     const wouldBlock = matches.length > 0 && nextBlocks <= 2;
-    const sentenceScores = scoreText(lastAssistantText, config.weights);
+    const sentenceScores = scoreText(lastAssistantText, config.weights, config.thresholds);
 
     const categoryCounts = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
     for (const m of matches) {
@@ -908,7 +971,8 @@ function main() {
   }
 
   // Avoid infinite loops: after 2 blocks in the same session, allow stop.
-  blockAndExit(sessionId, stopHookActive, buildBlockReason(matches));
+  const sentenceScores = scoreText(lastAssistantText, config.weights, config.thresholds);
+  blockAndExit(sessionId, stopHookActive, buildBlockReason(matches, sentenceScores));
 }
 
 // Export internals for testing; run main() only when executed directly.
@@ -937,6 +1001,7 @@ module.exports = {
   loadConfig,
   scoreText,
   DEFAULT_WEIGHTS,
+  DEFAULT_THRESHOLDS,
   // New introspection exports
   appendIntrospectionLog,
   hashText,
