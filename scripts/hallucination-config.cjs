@@ -83,7 +83,7 @@ function splitTopLevel(content, sep) {
   for (let i = 0; i < content.length; i++) {
     const ch = content[i];
     if (inStr) {
-      if (ch === '\\') {
+      if (ch === '\\' && i + 1 < content.length) {
         i++;
         continue;
       }
@@ -115,7 +115,7 @@ function stripTomlInlineComment(valStr) {
   for (let i = 0; i < valStr.length; i++) {
     const ch = valStr[i];
     if (inStr) {
-      if (ch === '\\') {
+      if (ch === '\\' && i + 1 < valStr.length) {
         i++;
         continue;
       }
