@@ -1,3 +1,9 @@
+## [1.12.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.11.0...v1.12.0) (2026-03-15)
+
+### Features
+
+- cascading configuration system for hallucination-detector ([#42](https://github.com/bitflight-devops/hallucination-detector/issues/42)) ([f5a1afb](https://github.com/bitflight-devops/hallucination-detector/commit/f5a1afb6b55d29dc0a8b539d8ad969b84e328686))
+
 ## [1.11.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.10.1...v1.11.0) (2026-03-11)
 
 ### Features
