@@ -1,3 +1,9 @@
+## [1.12.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.0...v1.12.1) (2026-03-16)
+
+### Bug Fixes
+
+- **detection:** use last_assistant_message from stdin, add direct-wrap suppression ([de5d21a](https://github.com/bitflight-devops/hallucination-detector/commit/de5d21a3ab8f406e493d862fad1feef1e120696f))
+
 ## [1.12.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.11.0...v1.12.0) (2026-03-15)
 
 ### Features
