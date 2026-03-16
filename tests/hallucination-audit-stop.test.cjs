@@ -1427,3 +1427,204 @@ describe('main() loop guard', () => {
     expect(parsed.decision).toBe('block');
   });
 });
+
+// =============================================================================
+// Direct-wrap suppression
+// Trigger words wrapped in matching quote pairs immediately adjacent on both
+// sides are being discussed as objects (use-mention distinction) and must not
+// fire speculation_language.
+// =============================================================================
+describe('direct-wrap suppression', () => {
+  it('does not flag "assume" wrapped in double quotes', () => {
+    // "assume" is being named/discussed, not used speculatively.
+    const matches = findTriggerMatches('He said "assume" and left.');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBe(0);
+  });
+
+  it('does not flag "assume" wrapped in single quotes', () => {
+    const matches = findTriggerMatches("He said 'assume' and left.");
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBe(0);
+  });
+
+  it('does not flag "i think" wrapped in double quotes', () => {
+    // Use-mention: the phrase is being discussed, not uttered.
+    const matches = findTriggerMatches('The word "i think" is speculative.');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBe(0);
+  });
+
+  it('does not flag "probably" wrapped in double quotes', () => {
+    const matches = findTriggerMatches('He said "probably" and left.');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBe(0);
+  });
+
+  it('still flags bare "assume" without wrapping quotes (confirms suppression is wrap-specific)', () => {
+    // No wrapping — bare usage must still fire.
+    const matches = findTriggerMatches('Use assume in a sentence.');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// Stale message re-scan — full transcript replay
+//
+// Verbatim JSONL fixture taken from real session transcript:
+//   /home/ubuntulinuxqa2/.claude/projects/
+//   -home-ubuntulinuxqa2-repos-hallucination-detector/
+//   8427ae52-369a-420b-bf83-434a42ea03ab.jsonl
+//
+// The fixture includes all entries up to and including the block event
+// (transcript lines 129–142).  The sequence is:
+//
+//   line 129: assistant — passes the hook (no trigger language)
+//   line 134: user    — "Can you allow any kind of wrap? like [{'\"` "
+//   line 135: assistant — contains "I think this is correct" in double quotes
+//             (use-mention); hook PASSED on this turn
+//   line 136: progress (hook_progress Stop)
+//   line 137: system  (stop_hook_summary, preventedContinuation: false)
+//   line 138: file-history-snapshot
+//   line 139: user    — "If the keyword is quoted like "assume"..."
+//   line 140: assistant — CLEAN message, no "i think" anywhere
+//   line 141: progress (hook_progress Stop)
+//   line 142: user (isMeta:true) — block feedback: speculation_language "i think"
+//
+// Bug: the hook fired on line 140's stop event but flagged "i think" from
+// line 135 — the PREVIOUS turn's assistant message.
+//
+// This test MUST FAIL under the current code.  The hook currently blocks even
+// though the last assistant message (line 140) contains no trigger phrases.
+// =============================================================================
+describe('stale message re-scan — full transcript replay', () => {
+  // ---------------------------------------------------------------------------
+  // Verbatim JSONL lines 129–139 from the real transcript.
+  // Line 140 is intentionally OMITTED — it simulates the race condition where
+  // the hook reads the transcript file before the current assistant response
+  // has been flushed.  The hook therefore sees line 135 as the last assistant
+  // entry and incorrectly flags "i think" from a previous turn.
+  // ---------------------------------------------------------------------------
+  const VERBATIM_JSONL_LINES = [
+    // line 129 — assistant (passes hook)
+    '{"parentUuid":"ee3cf531-7d37-4e16-8e40-e7f51288a876","isSidechain":false,"userType":"external","cwd":"/home/ubuntulinuxqa2/repos/hallucination-detector","sessionId":"8427ae52-369a-420b-bf83-434a42ea03ab","version":"2.1.72","gitBranch":"main","slug":"quiet-prancing-wozniak","message":{"model":"claude-opus-4-6","id":"msg_013YZ68naDuds27CD9ZGNVDE","type":"message","role":"assistant","content":[{"type":"text","text":"The evidence is clear. Looking at the report:\\n\\n**The hook worked correctly every time.** The early messages (#3, #4, #5) had many bare occurrences of the word in double quotes (`\\"assume\\"`) rather than backticks. The hook strips backtick-wrapped content but not double-quoted content.\\n\\nMessage #9 (line 91-92) also had bare occurrences in double quotes.\\n\\nMessage #14 (line 139) had a bare occurrence in the prose phrase \\"So backticked `assume` should have been stripped.\\"\\n\\n**What the transcript shows**: I was using double quotes to mention the word instead of backticks. The hook only strips backtick-wrapped inline code, not double-quoted strings. Every block was legitimate — bare instances were present each time.\\n\\nNo bug in the hook."}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":453,"cache_read_input_tokens":82371,"output_tokens":186,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":453,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard"}},"requestId":"req_011CYwZUU7RHFoZn2ppDGGRK","type":"assistant","uuid":"0313de26-acea-43d7-9b18-b0648b6c3194","timestamp":"2026-03-11T15:52:12.033Z"}',
+    // line 130 — progress (hook_progress Stop for line 129's turn)
+    '{"parentUuid":"0313de26-acea-43d7-9b18-b0648b6c3194","isSidechain":false,"userType":"external","cwd":"/home/ubuntulinuxqa2/repos/hallucination-detector","sessionId":"8427ae52-369a-420b-bf83-434a42ea03ab","version":"2.1.72","gitBranch":"main","slug":"quiet-prancing-wozniak","type":"progress","data":{"type":"hook_progress","hookEvent":"Stop","hookName":"Stop","command":"node \\"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-audit-stop.js\\""},"parentToolUseID":"29c9db77-46b0-4b38-99b6-2a0a44c5c828","toolUseID":"29c9db77-46b0-4b38-99b6-2a0a44c5c828","timestamp":"2026-03-11T15:52:12.061Z","uuid":"5b9f5bae-cb28-4567-99d4-29a0804d078e"}',
+    // line 131 — system (stop_hook_summary)
+    '{"parentUuid":"5b9f5bae-cb28-4567-99d4-29a0804d078e","isSidechain":false,"userType":"external","cwd":"/home/ubuntulinuxqa2/repos/hallucination-detector","sessionId":"8427ae52-369a-420b-bf83-434a42ea03ab","version":"2.1.72","gitBranch":"main","slug":"quiet-prancing-wozniak","type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"node \\"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-audit-stop.js\\"","durationMs":24}],"hookErrors":[],"preventedContinuation":false,"stopReason":"","hasOutput":false,"level":"suggestion","timestamp":"2026-03-11T15:52:12.087Z","uuid":"2afae7bf-7be5-468b-b6ac-423d89c6bece","toolUseID":"29c9db77-46b0-4b38-99b6-2a0a44c5c828"}',
+    // line 132 — system (turn_duration)
+    '{"parentUuid":"2afae7bf-7be5-468b-b6ac-423d89c6bece","isSidechain":false,"userType":"external","cwd":"/home/ubuntulinuxqa2/repos/hallucination-detector","sessionId":"8427ae52-369a-420b-bf83-434a42ea03ab","version":"2.1.72","gitBranch":"main","slug":"quiet-prancing-wozniak","type":"system","subtype":"turn_duration","durationMs":126344,"timestamp":"2026-03-11T15:52:12.087Z","uuid":"a9bf85a4-739f-44d7-aefd-9c8fda322b8a","isMeta":false}',
+    // line 133 — file-history-snapshot
+    '{"type":"file-history-snapshot","messageId":"dfda07cb-182d-4774-8266-36c8d6808575","snapshot":{"messageId":"dfda07cb-182d-4774-8266-36c8d6808575","trackedFileBackups":{},"timestamp":"2026-03-11T16:14:50.463Z"},"isSnapshotUpdate":false}',
+    // line 134 — user: "Can you allow any kind of wrap?"
+    '{"parentUuid":"a9bf85a4-739f-44d7-aefd-9c8fda322b8a","isSidechain":false,"userType":"external","cwd":"/home/ubuntulinuxqa2/repos/hallucination-detector","sessionId":"8427ae52-369a-420b-bf83-434a42ea03ab","version":"2.1.72","gitBranch":"main","slug":"quiet-prancing-wozniak","type":"user","message":{"role":"user","content":"Can you allow any kind of wrap? like [{\'\\"\\u0060"},"uuid":"dfda07cb-182d-4774-8266-36c8d6808575","timestamp":"2026-03-11T16:14:50.462Z","permissionMode":"bypassPermissions"}',
+    // line 135 — assistant: contains "I think this is correct" in double quotes
+    '{"parentUuid":"dfda07cb-182d-4774-8266-36c8d6808575","isSidechain":false,"userType":"external","cwd":"/home/ubuntulinuxqa2/repos/hallucination-detector","sessionId":"8427ae52-369a-420b-bf83-434a42ea03ab","version":"2.1.72","gitBranch":"main","slug":"quiet-prancing-wozniak","message":{"model":"claude-opus-4-6","id":"msg_01Xew6rboSyUeJ4Qngp5v6GB","type":"message","role":"assistant","content":[{"type":"text","text":"That\'s a design decision worth considering, but there\'s a trade-off:\\n\\n- Double quotes are used in normal prose all the time (\\"the user said X\\")\\n- Single quotes same\\n- Square brackets have meaning in the claim structure (`[VERIFIED]`, `[c1]`)\\n- Backticks are the only delimiter that unambiguously signals \\"I\'m mentioning this as a code/meta reference, not using it\\"\\n\\nExpanding the stripping to `\\"assume\\"` would also strip any double-quoted text from scanning — which could let speculation slip through inside quotation marks (\\"I think this is correct\\" would become invisible to the hook).\\n\\nThe current design is correct: backticks = meta-discussion, everything else = prose that gets scanned. The fix is for me to consistently use backticks when discussing trigger words, which the hook\'s block message already instructs.\\n\\nDo you still want to change it, or keep the current behavior?"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"cache_creation_input_tokens":896,"cache_read_input_tokens":82371,"output_tokens":209,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":896},"inference_geo":"","iterations":[],"speed":"standard"}},"requestId":"req_011CYwbCvYShRm9atyNpoLQs","type":"assistant","uuid":"4f70102b-0c44-4053-b389-b003af16b2f8","timestamp":"2026-03-11T16:14:58.577Z"}',
+    // line 136 — progress (hook_progress Stop for line 135's turn)
+    '{"parentUuid":"4f70102b-0c44-4053-b389-b003af16b2f8","isSidechain":false,"userType":"external","cwd":"/home/ubuntulinuxqa2/repos/hallucination-detector","sessionId":"8427ae52-369a-420b-bf83-434a42ea03ab","version":"2.1.72","gitBranch":"main","slug":"quiet-prancing-wozniak","type":"progress","data":{"type":"hook_progress","hookEvent":"Stop","hookName":"Stop","command":"node \\"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-audit-stop.js\\""},"parentToolUseID":"f35519b4-72f4-4bf0-b49b-588a58bc159f","toolUseID":"f35519b4-72f4-4bf0-b49b-588a58bc159f","timestamp":"2026-03-11T16:14:58.625Z","uuid":"adc04cc3-39ea-4126-be71-552778c2b76b"}',
+    // line 137 — system (stop_hook_summary, preventedContinuation: false — hook passed line 135)
+    '{"parentUuid":"adc04cc3-39ea-4126-be71-552778c2b76b","isSidechain":false,"userType":"external","cwd":"/home/ubuntulinuxqa2/repos/hallucination-detector","sessionId":"8427ae52-369a-420b-bf83-434a42ea03ab","version":"2.1.72","gitBranch":"main","slug":"quiet-prancing-wozniak","type":"system","subtype":"stop_hook_summary","hookCount":1,"hookInfos":[{"command":"node \\"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-audit-stop.js\\"","durationMs":128}],"hookErrors":[],"preventedContinuation":false,"stopReason":"","hasOutput":false,"level":"suggestion","timestamp":"2026-03-11T16:14:58.755Z","uuid":"e31bd9fe-b3fe-41ba-a044-488518efee23","toolUseID":"f35519b4-72f4-4bf0-b49b-588a58bc159f"}',
+    // line 138 — file-history-snapshot
+    '{"type":"file-history-snapshot","messageId":"4d6c3aa1-3fc5-4fed-8714-14d233ead16d","snapshot":{"messageId":"4d6c3aa1-3fc5-4fed-8714-14d233ead16d","trackedFileBackups":{},"timestamp":"2026-03-11T16:16:30.411Z"},"isSnapshotUpdate":false}',
+    // line 139 — user: "If the keyword is quoted like..."
+    '{"parentUuid":"e31bd9fe-b3fe-41ba-a044-488518efee23","isSidechain":false,"userType":"external","cwd":"/home/ubuntulinuxqa2/repos/hallucination-detector","sessionId":"8427ae52-369a-420b-bf83-434a42ea03ab","version":"2.1.72","gitBranch":"main","slug":"quiet-prancing-wozniak","type":"user","message":{"role":"user","content":"If the keyword is quoted like \\"assume\\" then its being addressed as an object. as would \\"likely\\" and \\"probably\\" be. I am not asking for you to ignore quoted content i am asking for you to skip keywords if they have direct wraps on them."},"uuid":"4d6c3aa1-3fc5-4fed-8714-14d233ead16d","timestamp":"2026-03-11T16:16:30.411Z","permissionMode":"bypassPermissions"}',
+  ];
+  // Line 140 (the CLEAN assistant response with no trigger phrases) is absent
+  // from the fixture above.  It would appear here if the hook read the file
+  // after the current turn's assistant message was flushed.
+
+  let tmpFile;
+
+  beforeEach(() => {
+    tmpFile = path.join(
+      os.tmpdir(),
+      `hd-full-replay-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+    );
+    fs.writeFileSync(tmpFile, VERBATIM_JSONL_LINES.join('\n') + '\n', 'utf-8');
+  });
+
+  afterEach(() => {
+    if (tmpFile && fs.existsSync(tmpFile)) {
+      fs.unlinkSync(tmpFile);
+    }
+    tmpFile = undefined;
+  });
+
+  it('sanity: last assistant entry in fixture (line 135) contains "i think"', () => {
+    // With line 140 absent, line 135 is the last assistant entry.
+    // Confirm it is the stale trigger source.
+    const entries = parseJsonl(VERBATIM_JSONL_LINES.join('\n') + '\n');
+    const lastText = getLastAssistantText(entries);
+    expect(lastText.toLowerCase()).toContain('i think');
+  });
+
+  it('end-to-end: hook does NOT block when invoked before current assistant message is in the transcript', () => {
+    // This test MUST FAIL under the current code.
+    //
+    // The fixture contains only lines 129–139.  Line 140 (the clean assistant
+    // response to "If the keyword is quoted like...") is not yet in the file —
+    // this simulates the race condition where Claude Code invokes the Stop hook
+    // before flushing the current assistant message to the JSONL transcript.
+    //
+    // The hook reads the file, finds line 135 as the last assistant entry, and
+    // incorrectly blocks for speculation_language: "i think".
+    //
+    // Correct behavior: the hook must NOT block.  When the transcript ends with
+    // a user message (line 139) and no subsequent assistant message, the hook
+    // has no current-turn assistant output to scan and must allow the stop.
+    const { stdout } = runHook({
+      session_id: '8427ae52-369a-420b-bf83-434a42ea03ab',
+      transcript_path: tmpFile,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    // Empty stdout = hook allowed Claude to stop (no block).
+    // This assertion FAILS under the current code.
+    expect(stdout.trim()).toBe('');
+  });
+});
+
+describe('last_assistant_message stdin field', () => {
+  let transcriptPath;
+
+  afterEach(() => {
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+    transcriptPath = undefined;
+  });
+
+  it('uses last_assistant_message over stale transcript — does not block clean message', () => {
+    // Transcript has a stale assistant message with speculation language.
+    // Stdin provides a clean last_assistant_message with no trigger phrases.
+    // Hook should scan the clean stdin field and NOT block.
+    transcriptPath = makeTempTranscript('I think this is correct');
+    const { stdout } = runHook({
+      session_id: `test-lam-clean-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+      last_assistant_message: 'The fix has been applied successfully.',
+    });
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('uses last_assistant_message over stale transcript — blocks trigger phrase in stdin field', () => {
+    // Transcript has a clean assistant message with no trigger phrases.
+    // Stdin provides a last_assistant_message containing a trigger phrase.
+    // Hook should scan the stdin field and BLOCK.
+    transcriptPath = makeTempTranscript('The fix has been applied successfully.');
+    const { stdout } = runHook({
+      session_id: `test-lam-trigger-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+      last_assistant_message: 'I think this will work correctly.',
+    });
+    expect(stdout.trim().length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.decision).toBe('block');
+  });
+});

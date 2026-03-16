@@ -57,8 +57,8 @@ function parseJsonl(text) {
   return entries;
 }
 
-function isSidechainEntry(entry) {
-  return Boolean(entry?.isSidechain);
+function isMainChainEntry(entry) {
+  return entry && typeof entry === 'object' && !entry.isSidechain && !entry.isMeta && entry.type;
 }
 
 function extractTextFromMessageContent(content) {
@@ -91,8 +91,7 @@ function getLastAssistantText(transcriptEntries) {
   // Find last main-chain assistant entry with message content.
   for (let i = transcriptEntries.length - 1; i >= 0; i--) {
     const entry = transcriptEntries[i];
-    if (!entry || typeof entry !== 'object') continue;
-    if (isSidechainEntry(entry)) continue;
+    if (!isMainChainEntry(entry)) continue;
 
     const type = entry.type;
     const message = entry.message;
@@ -337,10 +336,25 @@ function findTriggerMatches(text, config = {}) {
       // Pronouns that precede "may" in permissive/instructional usage ("you may use").
       const PERMISSIVE_MAY_PRONOUNS = new Set(['you', 'one', 'anyone', 'users', 'they', 'we']);
       for (const phrase of speculationPhrases) {
-        const idx = lower.indexOf(phrase);
-        if (idx !== -1) {
+        let searchFrom = 0;
+        while (true) {
+          const idx = lower.indexOf(phrase, searchFrom);
+          if (idx === -1) break;
+          searchFrom = idx + phrase.length;
+
           // Questions like "Should I do that now?" are desirable—don't flag.
           if (isIndexWithinQuestion(haystack, idx)) continue;
+          // Use-mention distinction: suppress when the phrase is directly wrapped in
+          // matching quote characters (e.g. "assume" or 'probably') — the word is
+          // being named/discussed, not used speculatively.
+          if (idx > 0) {
+            const quoteChar = lower[idx - 1];
+            if (
+              (quoteChar === '"' || quoteChar === "'") &&
+              lower[idx + phrase.length] === quoteChar
+            )
+              continue;
+          }
           // Suppress permissive "may" when preceded by a permission-granting pronoun.
           if (phrase === 'may') {
             const before = lower.slice(0, idx).trimEnd();
@@ -348,6 +362,7 @@ function findTriggerMatches(text, config = {}) {
             if (PERMISSIVE_MAY_PRONOUNS.has(lastWord)) continue;
           }
           matches.push({ kind: 'speculation_language', evidence: phrase });
+          break; // one flag per phrase kind is sufficient
         }
       }
 
@@ -931,17 +946,41 @@ function main() {
   const sessionId = input.session_id || '';
   const stopHookActive = Boolean(input.stop_hook_active);
 
-  if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-    process.exit(0);
+  // Prefer last_assistant_message from stdin: Claude Code provides the current
+  // turn's text directly, avoiding the race condition where the transcript is
+  // not yet flushed when the Stop hook fires.
+  const lastAssistantMessageFromStdin =
+    typeof input.last_assistant_message === 'string' && input.last_assistant_message.trim()
+      ? input.last_assistant_message
+      : null;
+
+  let entries = [];
+  if (!lastAssistantMessageFromStdin) {
+    // Transcript is only needed when stdin does not supply the message directly.
+    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+      process.exit(0);
+    }
+
+    const transcriptText = safeReadFileText(transcriptPath);
+    if (!transcriptText.trim()) {
+      process.exit(0);
+    }
+
+    entries = parseJsonl(transcriptText);
+
+    // Guard against the race condition where the Stop hook fires before the
+    // current turn's assistant message has been flushed to the JSONL transcript.
+    // In that case the transcript ends with a user (or system/progress) entry and
+    // the last assistant entry belongs to a previous turn.  Scanning it would
+    // produce a false positive block.  Skip scanning when the last main-chain
+    // non-meta entry is not an assistant message.
+    const lastMainEntry = entries.findLast(isMainChainEntry);
+    if (lastMainEntry && lastMainEntry.type !== 'assistant') {
+      process.exit(0);
+    }
   }
 
-  const transcriptText = safeReadFileText(transcriptPath);
-  if (!transcriptText.trim()) {
-    process.exit(0);
-  }
-
-  const entries = parseJsonl(transcriptText);
-  const lastAssistantText = getLastAssistantText(entries);
+  const lastAssistantText = lastAssistantMessageFromStdin ?? getLastAssistantText(entries);
   if (!lastAssistantText) {
     process.exit(0);
   }
@@ -1032,6 +1071,7 @@ module.exports = {
   stripLowSignalRegions,
   extractTextFromMessageContent,
   getLastAssistantText,
+  isMainChainEntry,
   hasEvidenceNearby,
   isIndexWithinQuestion,
   isQualityScore,
