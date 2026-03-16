@@ -18,6 +18,5 @@
     "stop-hook",
     "quality"
   ],
-  "commands": "./commands/",
-  "hooks": "./hooks/hooks.json"
+  "commands": "./commands/"
 }
