@@ -1030,13 +1030,16 @@ function splitIntoSentences(text) {
  * for that category is detected in the sentence, otherwise 0.
  *
  * @param {string} sentence - The sentence text to analyze.
+ * @param {object} [config]  - Optional runtime config forwarded to `findTriggerMatches`.
+ *   Supports `config.categories.<name>.enabled`, `config.categories.<name>.customPatterns`,
+ *   `config.categories.<name>.replacePatterns`, and `config.allowlist`.
  * @returns {Object<string, number>} An object mapping category names to `0` or `1`, where `1` indicates the category was triggered in the sentence.
  */
-function scoreSentence(sentence) {
+function scoreSentence(sentence, config) {
   // `internal_contradiction` detection requires >= 2 sentences and always returns []
   // for a single sentence (early-return in detectInternalContradictions). The call is
   // a no-op for that category — scores[internal_contradiction] will always be 0 here.
-  const matches = findTriggerMatches(sentence);
+  const matches = findTriggerMatches(sentence, config);
   const scores = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
   for (const match of matches) {
     if (Object.hasOwn(scores, match.kind)) {
@@ -1099,12 +1102,14 @@ function getLabelForScore(score, thresholds) {
  * @param {string} text       - Input text to analyze.
  * @param {object} [weights]  - Optional weight overrides (defaults to DEFAULT_WEIGHTS).
  * @param {object} [thresholds] - Optional threshold overrides (defaults to DEFAULT_THRESHOLDS).
+ * @param {object} [config]   - Optional runtime config forwarded to `scoreSentence` and
+ *   `findTriggerMatches`. Controls enabled categories, custom patterns, and allowlists.
  */
-function scoreText(text, weights, thresholds) {
+function scoreText(text, weights, thresholds, config) {
   const sentences = splitIntoSentences(text);
   const total = sentences.length;
   return sentences.map((sentence, index) => {
-    const scores = scoreSentence(sentence);
+    const scores = scoreSentence(sentence, config);
     const aggregateScore = aggregateWeightedScore(scores, weights);
     const label = getLabelForScore(aggregateScore, thresholds);
     return { sentence, index, total, scores, aggregateScore, label };
@@ -1471,7 +1476,7 @@ function main() {
       path.join(os.tmpdir(), 'hallucination-detector-introspect.jsonl');
 
     const wouldBlock = hasIssues && nextBlocks <= maxBlocks;
-    const sentenceScores = scoreText(lastAssistantText, config.weights, config.thresholds);
+    const sentenceScores = scoreText(lastAssistantText, config.weights, config.thresholds, config);
 
     const categoryCounts = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
     for (const m of triggerMatches) {
@@ -1503,7 +1508,7 @@ function main() {
     process.exit(0);
   }
 
-  const sentenceScoresForBlock = scoreText(lastAssistantText, config.weights, config.thresholds);
+  const sentenceScoresForBlock = scoreText(lastAssistantText, config.weights, config.thresholds, config);
 
   if (structuralErrors.length > 0 && triggerMatches.length > 0) {
     blockAndExit(

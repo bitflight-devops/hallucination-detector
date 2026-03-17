@@ -1882,7 +1882,6 @@ describe('DEFAULT_THRESHOLDS', () => {
 });
 
 // =============================================================================
-<<<<<<< HEAD
 // buildCombinedBlockReason
 // =============================================================================
 describe('buildCombinedBlockReason', () => {
@@ -2035,7 +2034,12 @@ describe('buildCombinedBlockReason', () => {
       { kind: 'causality_language', evidence: 'because' },
     ];
     const reason = buildCombinedBlockReason(errors, matches);
-=======
+    const secondPassMatches = findTriggerMatches(reason);
+    expect(secondPassMatches.length).toBe(0);
+  });
+});
+
+// =============================================================================
 // getLabelForScore — custom thresholds
 // =============================================================================
 describe('getLabelForScore with custom thresholds', () => {
@@ -2079,6 +2083,44 @@ describe('scoreText with custom thresholds', () => {
   it('uses DEFAULT_THRESHOLDS when no thresholds argument passed', () => {
     const results = scoreText('I read the file and saw no errors.');
     expect(results[0].label).toBe('GROUNDED');
+  });
+});
+
+// =============================================================================
+// scoreText — config propagation to findTriggerMatches
+// =============================================================================
+describe('scoreText config propagation', () => {
+  it('honors disabled category — speculation_language disabled produces score 0', () => {
+    const sentence = 'I think this is correct.';
+    const config = { categories: { speculation_language: { enabled: false } } };
+
+    const withConfig = scoreText(sentence, DEFAULT_WEIGHTS, undefined, config);
+    expect(withConfig[0].scores.speculation_language).toBe(0);
+
+    const withoutConfig = scoreText(sentence, DEFAULT_WEIGHTS, undefined);
+    expect(withoutConfig[0].scores.speculation_language).toBe(1);
+  });
+
+  it('honors disabled category — completeness_claim disabled produces score 0', () => {
+    const sentence = 'Everything is fully resolved.';
+    const config = { categories: { completeness_claim: { enabled: false } } };
+
+    const withConfig = scoreText(sentence, DEFAULT_WEIGHTS, undefined, config);
+    expect(withConfig[0].scores.completeness_claim).toBe(0);
+
+    const withoutConfig = scoreText(sentence, DEFAULT_WEIGHTS, undefined);
+    expect(withoutConfig[0].scores.completeness_claim).toBe(1);
+  });
+
+  it('config does not affect unrelated categories', () => {
+    const sentence = 'I think this is correct.';
+    const config = { categories: { completeness_claim: { enabled: false } } };
+
+    const results = scoreText(sentence, DEFAULT_WEIGHTS, undefined, config);
+    // speculation_language is NOT disabled — should still fire
+    expect(results[0].scores.speculation_language).toBe(1);
+    // completeness_claim is disabled — should be 0
+    expect(results[0].scores.completeness_claim).toBe(0);
   });
 });
 
@@ -2209,14 +2251,12 @@ describe('buildBlockReason sentence-level analysis', () => {
     ];
     const reason = buildBlockReason(matches, sentenceScores);
     // The backtick-wrapped snippet must not cause the reason to self-trigger
->>>>>>> 2657020 (feat: configurable thresholds, sentence-level reasons, contradiction detection)
     const secondPassMatches = findTriggerMatches(reason);
     expect(secondPassMatches.length).toBe(0);
   });
 });
 
 // =============================================================================
-<<<<<<< HEAD
 // Combined validation — both structural errors and trigger matches in one pass
 // =============================================================================
 describe('combined validation (structural + trigger in one block)', () => {
@@ -2286,7 +2326,10 @@ describe('combined validation (structural + trigger in one block)', () => {
     const parsed = JSON.parse(stdout.trim());
     const secondPassMatches = findTriggerMatches(parsed.reason);
     expect(secondPassMatches.length).toBe(0);
-=======
+  });
+});
+
+// =============================================================================
 // stemWord
 // =============================================================================
 describe('stemWord', () => {
@@ -2332,7 +2375,6 @@ describe('stemWord', () => {
 
   it('strips -ly suffix', () => {
     expect(stemWord('quickly')).toBe('quick');
->>>>>>> 2657020 (feat: configurable thresholds, sentence-level reasons, contradiction detection)
   });
 
   it('preserves legitimate double-s in base form (kissing → kiss)', () => {
@@ -2353,7 +2395,6 @@ describe('stemWord', () => {
 });
 
 // =============================================================================
-<<<<<<< HEAD
 // maxBlocksPerSession wired from config
 // =============================================================================
 describe('maxBlocksPerSession from config', () => {
@@ -2460,7 +2501,10 @@ describe('maxBlocksPerSession from config', () => {
     });
 
     expect(stdout.trim()).toBe('');
-=======
+  });
+});
+
+// =============================================================================
 // extractSignificantTerms
 // =============================================================================
 describe('extractSignificantTerms', () => {
@@ -2492,12 +2536,10 @@ describe('extractSignificantTerms', () => {
   it('returns empty array for stop-word-only input', () => {
     const terms = extractSignificantTerms('the is and or');
     expect(terms).toEqual([]);
->>>>>>> 2657020 (feat: configurable thresholds, sentence-level reasons, contradiction detection)
   });
 });
 
 // =============================================================================
-<<<<<<< HEAD
 // Introspection mode with combined validation
 // =============================================================================
 describe('introspection mode with combined validation', () => {
@@ -2583,7 +2625,10 @@ describe('introspection mode with combined validation', () => {
     const entry = JSON.parse(logLines[0]);
     expect(entry).toHaveProperty('structuralErrorCount');
     expect(typeof entry.structuralErrorCount).toBe('number');
-=======
+  });
+});
+
+// =============================================================================
 // stripNegationMarkers
 // =============================================================================
 describe('stripNegationMarkers', () => {
@@ -2712,6 +2757,5 @@ describe('findTriggerMatches internal_contradiction', () => {
     const matches = findTriggerMatches(text, config);
     const contradictionMatches = matches.filter((m) => m.kind === 'internal_contradiction');
     expect(contradictionMatches).toHaveLength(0);
->>>>>>> 2657020 (feat: configurable thresholds, sentence-level reasons, contradiction detection)
   });
 });
