@@ -20,7 +20,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { loadConfig, loadWeights, DEFAULT_WEIGHTS } = require('./hallucination-config.cjs');
+const {
+  loadConfig,
+  loadWeights,
+  DEFAULT_WEIGHTS,
+  DEFAULT_THRESHOLDS,
+} = require('./hallucination-config.cjs');
 const {
   validateClaimStructure,
   CLAIM_LABEL_ALTERNATION,
@@ -258,6 +263,245 @@ function hasEnumerationNearby(text, idx) {
   const preceding = text.slice(start, idx);
   const allMatches = preceding.match(LIST_ITEM_RE);
   return allMatches !== null && allMatches.length >= 2;
+}
+
+// =============================================================================
+// Internal contradiction detection helpers
+// =============================================================================
+
+/**
+ * Common English stop words filtered out before stemming and Jaccard comparison.
+ * Includes articles, prepositions, pronouns, auxiliaries, and conjunctions.
+ */
+const INTERNAL_CONTRADICTION_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'the',
+  'and',
+  'but',
+  'or',
+  'nor',
+  'so',
+  'yet',
+  'for',
+  'of',
+  'in',
+  'on',
+  'at',
+  'to',
+  'up',
+  'as',
+  'by',
+  'is',
+  'it',
+  'its',
+  'be',
+  'was',
+  'are',
+  'were',
+  'been',
+  'being',
+  'has',
+  'have',
+  'had',
+  'do',
+  'does',
+  'did',
+  'will',
+  'would',
+  'shall',
+  'should',
+  'may',
+  'might',
+  'must',
+  'can',
+  'could',
+  'that',
+  'this',
+  'these',
+  'those',
+  'than',
+  'then',
+  'when',
+  'where',
+  'who',
+  'which',
+  'what',
+  'how',
+  'if',
+  'with',
+  'from',
+  'into',
+  'onto',
+  'upon',
+  'about',
+  'above',
+  'after',
+  'before',
+  'between',
+  'through',
+  'during',
+  'he',
+  'she',
+  'they',
+  'we',
+  'you',
+  'i',
+  'me',
+  'him',
+  'her',
+  'us',
+  'them',
+  'my',
+  'your',
+  'his',
+  'our',
+  'their',
+  'all',
+  'any',
+  'each',
+  'every',
+  'not',
+  'no',
+  'never',
+  'also',
+  'just',
+  'only',
+  'very',
+  'more',
+  'most',
+  'own',
+  'same',
+  'such',
+  'too',
+  'both',
+  'few',
+  'other',
+  'some',
+  'out',
+]);
+
+/** Regex matching negation markers used to classify sentences as negated/affirmative. */
+const NEGATION_POLARITY_RE = /\b(?:not|never|no(?:ne|body|thing|where)?|n't)\b/i;
+
+/**
+ * Lightweight suffix stripper that normalizes word forms.
+ * After stripping `-ing`, collapses doubled final consonants (e.g., "runn" → "run").
+ *
+ * @param {string} word - Lowercase word.
+ * @returns {string} Stemmed form.
+ */
+function stemWord(word) {
+  if (word.length <= 3) return word;
+
+  // Strip common suffixes in specificity order.
+  let result = word;
+  if (result.endsWith('ing') && result.length > 5) {
+    result = result.slice(0, -3);
+    // Collapse doubled final consonant introduced by suffix removal (e.g., "runn" → "run").
+    if (result.length >= 3 && result[result.length - 1] === result[result.length - 2]) {
+      result = result.slice(0, -1);
+    }
+    return result;
+  }
+  if (result.endsWith('tion') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ness') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ment') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ible') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('able') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ical') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ized') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ised') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ful') && result.length > 5) return result.slice(0, -3);
+  if (result.endsWith('ous') && result.length > 5) return result.slice(0, -3);
+  if (result.endsWith('ive') && result.length > 5) return result.slice(0, -3);
+  if (result.endsWith('ies') && result.length > 5) return `${result.slice(0, -3)}y`;
+  if (result.endsWith('ied') && result.length > 5) return `${result.slice(0, -3)}y`;
+  if (result.endsWith('ed') && result.length > 4) return result.slice(0, -2);
+  if (result.endsWith('er') && result.length > 4) return result.slice(0, -2);
+  if (result.endsWith('ly') && result.length > 4) return result.slice(0, -2);
+  if (result.endsWith('es') && result.length > 4) return result.slice(0, -2);
+  if (result.endsWith('s') && result.length > 3) return result.slice(0, -1);
+
+  return result;
+}
+
+/**
+ * Extract significant terms from a sentence: lowercase, filter stop words, apply stemWord.
+ *
+ * @param {string} sentence
+ * @returns {string[]} Array of stemmed significant tokens.
+ */
+function extractSignificantTerms(sentence) {
+  return sentence
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((w) => w.length >= 3 && !INTERNAL_CONTRADICTION_STOP_WORDS.has(w))
+    .map(stemWord);
+}
+
+/**
+ * Remove negation markers from a sentence for term-overlap comparison.
+ *
+ * @param {string} sentence
+ * @returns {string}
+ */
+function stripNegationMarkers(sentence) {
+  return sentence
+    .replace(
+      /\b(?:don't|doesn't|didn't|won't|wouldn't|can't|couldn't|shouldn't|isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't)\b/gi,
+      '',
+    )
+    .replace(NEGATION_POLARITY_RE, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * Detect internal contradictions: pairs of affirmative/negated sentences that share
+ * >= 2 significant terms and have Jaccard similarity >= 0.4.
+ *
+ * @param {string} text
+ * @returns {Array<{kind: string, evidence: string}>} Match objects.
+ */
+function detectInternalContradictions(text) {
+  const sentences = splitIntoSentences(stripLowSignalRegions(text));
+  if (sentences.length < 2) return [];
+
+  const classified = sentences.map((s) => ({
+    text: s,
+    negated: NEGATION_POLARITY_RE.test(s),
+    terms: new Set(extractSignificantTerms(stripNegationMarkers(s))),
+  }));
+
+  const contradictions = [];
+
+  for (let i = 0; i < classified.length; i++) {
+    for (let j = i + 1; j < classified.length; j++) {
+      const a = classified[i];
+      const b = classified[j];
+
+      // One must be negated and the other affirmative.
+      if (a.negated === b.negated) continue;
+
+      // Compute Jaccard similarity on stemmed significant terms.
+      const intersection = new Set([...a.terms].filter((t) => b.terms.has(t)));
+      if (intersection.size < 2) continue;
+
+      const union = new Set([...a.terms, ...b.terms]);
+      const jaccard = intersection.size / union.size;
+      if (jaccard < 0.4) continue;
+
+      const snippetA = a.text.length > 40 ? `${a.text.slice(0, 40)}...` : a.text;
+      const snippetB = b.text.length > 40 ? `${b.text.slice(0, 40)}...` : b.text;
+      contradictions.push({
+        kind: 'internal_contradiction',
+        evidence: `"${snippetA}" vs "${snippetB}"`,
+      });
+    }
+  }
+
+  return contradictions;
 }
 
 /**
@@ -729,6 +973,16 @@ function findTriggerMatches(text, config = {}) {
     runCustomPatterns('evaluative_design_claim');
   }
 
+  // 6) Internal contradictions: pairs of affirmative/negated sentences with >= 0.4 Jaccard overlap.
+  if (isCategoryEnabled('internal_contradiction')) {
+    if (useBuiltIn('internal_contradiction')) {
+      for (const m of detectInternalContradictions(rawText)) {
+        matches.push(m);
+      }
+    }
+    runCustomPatterns('internal_contradiction');
+  }
+
   // Apply allowlist filter and maxTriggersPerResponse limit.
   const allowlist = Array.isArray(config.allowlist) ? config.allowlist : [];
   const maxTriggers =
@@ -812,14 +1066,18 @@ function aggregateWeightedScore(scores, weights) {
 }
 
 /**
- * Map an aggregate score to a three-tier label.
- *   GROUNDED     : score < 0.30
- *   UNCERTAIN    : 0.30 <= score <= 0.60
- *   HALLUCINATED : score > 0.60
+ * Map an aggregate score to a three-tier label using configurable thresholds.
+ *   GROUNDED     : score < thresholds.uncertain
+ *   UNCERTAIN    : thresholds.uncertain <= score <= thresholds.hallucinated
+ *   HALLUCINATED : score > thresholds.hallucinated
+ *
+ * @param {number} score - Aggregate score in [0, 1].
+ * @param {object} [thresholds] - Optional threshold overrides. Falls back to DEFAULT_THRESHOLDS.
  */
-function getLabelForScore(score) {
-  if (score < 0.3) return 'GROUNDED';
-  if (score <= 0.6) return 'UNCERTAIN';
+function getLabelForScore(score, thresholds) {
+  const t = thresholds || DEFAULT_THRESHOLDS;
+  if (score < t.uncertain) return 'GROUNDED';
+  if (score <= t.hallucinated) return 'UNCERTAIN';
   return 'HALLUCINATED';
 }
 
@@ -830,16 +1088,17 @@ function getLabelForScore(score) {
  * Returns an array of per-sentence result objects:
  *   { sentence, index, total, scores, aggregateScore, label }
  *
- * @param {string} text     - Input text to analyze.
- * @param {object} [weights] - Optional weight overrides (defaults to DEFAULT_WEIGHTS).
+ * @param {string} text       - Input text to analyze.
+ * @param {object} [weights]  - Optional weight overrides (defaults to DEFAULT_WEIGHTS).
+ * @param {object} [thresholds] - Optional threshold overrides (defaults to DEFAULT_THRESHOLDS).
  */
-function scoreText(text, weights) {
+function scoreText(text, weights, thresholds) {
   const sentences = splitIntoSentences(text);
   const total = sentences.length;
   return sentences.map((sentence, index) => {
     const scores = scoreSentence(sentence);
     const aggregateScore = aggregateWeightedScore(scores, weights);
-    const label = getLabelForScore(aggregateScore);
+    const label = getLabelForScore(aggregateScore, thresholds);
     return { sentence, index, total, scores, aggregateScore, label };
   });
 }
@@ -1017,15 +1276,17 @@ function buildStructuralBlockReason(errors) {
  * Constructs a human-readable block reason from detected trigger matches.
  *
  * @param {Array<{kind: string, evidence: string}>} matches - Array of match objects; each must have a `kind` label and an `evidence` snippet used in the reason.
+ * @param {Array<{sentence: string, index: number, total: number, aggregateScore: number, label: string}>} [sentenceScores] - Optional per-sentence scoring results from scoreText(). When provided, sentences labeled UNCERTAIN or HALLUCINATED are appended as a sentence-level analysis section.
  * @returns {string} A formatted block reason string suitable for the STOP hook output.
  */
-function buildBlockReason(matches) {
+function buildBlockReason(matches, sentenceScores) {
   const uniqueKinds = [...new Set(matches.map((m) => m.kind))];
   const evidenceSnippets = matches
     .slice(0, 6)
     .map((m) => `- ${m.kind}: \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``)
     .join('\n');
-  return [
+
+  const parts = [
     BLOCK_HEADER,
     '',
     'Detected trigger language in your last assistant message:',
@@ -1040,7 +1301,26 @@ function buildBlockReason(matches) {
     '- If an evaluative label (`cleanest`, `simplest`, `obvious`) appears on a proposed change: state what the changed component protects when functioning correctly before proposing to change it.',
     '',
     `Kinds flagged: ${uniqueKinds.join(', ')}`,
-  ].join('\n');
+  ];
+
+  if (Array.isArray(sentenceScores) && sentenceScores.length > 0) {
+    const flaggedSentences = sentenceScores.filter(
+      (s) => s.label === 'UNCERTAIN' || s.label === 'HALLUCINATED',
+    );
+    if (flaggedSentences.length > 0) {
+      const total = sentenceScores.length;
+      parts.push('');
+      parts.push('Sentence-level analysis:');
+      for (const s of flaggedSentences) {
+        const n = s.index + 1;
+        const raw = s.sentence.replace(/\s+/g, ' ').trim();
+        const snippet = raw.length > 60 ? `${raw.slice(0, 60)}...` : raw;
+        parts.push(`- sentence ${n} of ${total} [${s.label}]: \`${snippet}\``);
+      }
+    }
+  }
+
+  return parts.join('\n');
 }
 
 /**
@@ -1182,7 +1462,7 @@ function main() {
       path.join(os.tmpdir(), 'hallucination-detector-introspect.jsonl');
 
     const wouldBlock = hasIssues && nextBlocks <= maxBlocks;
-    const sentenceScores = scoreText(lastAssistantText, config.weights);
+    const sentenceScores = scoreText(lastAssistantText, config.weights, config.thresholds);
 
     const categoryCounts = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
     for (const m of triggerMatches) {
@@ -1214,6 +1494,8 @@ function main() {
     process.exit(0);
   }
 
+  const sentenceScoresForBlock = scoreText(lastAssistantText, config.weights, config.thresholds);
+
   if (structuralErrors.length > 0 && triggerMatches.length > 0) {
     blockAndExit(
       sessionId,
@@ -1233,7 +1515,7 @@ function main() {
   }
 
   // Trigger matches only.
-  blockAndExit(sessionId, stopHookActive, buildBlockReason(triggerMatches), maxBlocks);
+  blockAndExit(sessionId, stopHookActive, buildBlockReason(triggerMatches, sentenceScoresForBlock), maxBlocks);
 }
 
 // Export internals for testing; run main() only when executed directly.
@@ -1264,6 +1546,7 @@ module.exports = {
   loadConfig,
   scoreText,
   DEFAULT_WEIGHTS,
+  DEFAULT_THRESHOLDS,
   // New introspection exports
   appendIntrospectionLog,
   hashText,
@@ -1273,4 +1556,11 @@ module.exports = {
   stripLabeledClaimLines,
   // Uncertainty enumeration suppression
   isWithinUncertaintyEnumeration,
+  // Internal contradiction detection exports
+  detectInternalContradictions,
+  extractSignificantTerms,
+  stripNegationMarkers,
+  stemWord,
+  NEGATION_POLARITY_RE,
+  INTERNAL_CONTRADICTION_STOP_WORDS,
 };

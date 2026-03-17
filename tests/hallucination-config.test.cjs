@@ -9,6 +9,7 @@ const {
   loadWeights,
   mergeConfig,
   DEFAULT_WEIGHTS,
+  DEFAULT_THRESHOLDS,
   DEFAULT_CONFIG,
 } = require('../scripts/hallucination-config.cjs');
 
@@ -16,21 +17,26 @@ const {
 // DEFAULT_WEIGHTS
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
-  it('has the expected 5 categories', () => {
+  it('has the expected 6 categories', () => {
     expect(DEFAULT_WEIGHTS).toHaveProperty('speculation_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('causality_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('pseudo_quantification');
     expect(DEFAULT_WEIGHTS).toHaveProperty('completeness_claim');
     expect(DEFAULT_WEIGHTS).toHaveProperty('evaluative_design_claim');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('internal_contradiction');
     expect(DEFAULT_WEIGHTS).not.toHaveProperty('fabricated_source');
-    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(5);
+    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(6);
   });
 
-  it('values sum to 1.3 (evaluative_design_claim: 0.4 added to base 0.9)', () => {
+  it('values sum to 1.65 (internal_contradiction: 0.35 added to base 1.3)', () => {
     // aggregateWeightedScore normalizes by weightSum, so aggregate scores remain in [0, 1].
     // fabricated_source (0.1) removed — reserved for future implementation (issue #18).
     const sum = Object.values(DEFAULT_WEIGHTS).reduce((a, b) => a + b, 0);
-    expect(Math.abs(sum - 1.3)).toBeLessThan(1e-9);
+    expect(Math.abs(sum - 1.65)).toBeLessThan(1e-9);
+  });
+
+  it('internal_contradiction weight is 0.35', () => {
+    expect(DEFAULT_WEIGHTS.internal_contradiction).toBe(0.35);
   });
 });
 
@@ -40,6 +46,10 @@ describe('DEFAULT_WEIGHTS', () => {
 describe('DEFAULT_CONFIG', () => {
   it('has a weights property equal to DEFAULT_WEIGHTS', () => {
     expect(DEFAULT_CONFIG.weights).toEqual(DEFAULT_WEIGHTS);
+  });
+
+  it('has a thresholds property equal to DEFAULT_THRESHOLDS', () => {
+    expect(DEFAULT_CONFIG.thresholds).toEqual(DEFAULT_THRESHOLDS);
   });
 
   it('has introspect: false', () => {
@@ -173,6 +183,27 @@ describe('DEFAULT_CONFIG new fields', () => {
 
   it('has contextLines: 2', () => {
     expect(DEFAULT_CONFIG.contextLines).toBe(2);
+  });
+});
+
+// =============================================================================
+// DEFAULT_THRESHOLDS
+// =============================================================================
+describe('DEFAULT_THRESHOLDS', () => {
+  it('has uncertain: 0.3', () => {
+    expect(DEFAULT_THRESHOLDS.uncertain).toBe(0.3);
+  });
+
+  it('has hallucinated: 0.6', () => {
+    expect(DEFAULT_THRESHOLDS.hallucinated).toBe(0.6);
+  });
+
+  it('has exactly 2 keys', () => {
+    expect(Object.keys(DEFAULT_THRESHOLDS).length).toBe(2);
+  });
+
+  it('is exported from hallucination-config.cjs', () => {
+    expect(typeof DEFAULT_THRESHOLDS).toBe('object');
   });
 });
 
@@ -621,6 +652,72 @@ describe('schema validation', () => {
     );
     loadConfig();
     expect(stderrOutput).toBe('');
+  });
+});
+
+// =============================================================================
+// loadConfig — threshold loading
+// =============================================================================
+describe('loadConfig thresholds', () => {
+  let tmpDir;
+  let originalCwd;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-thresh-test-${Date.now()}-`));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('returns DEFAULT_THRESHOLDS when no rc file exists', () => {
+    const config = loadConfig();
+    expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
+  });
+
+  it('loads a valid threshold pair from rc file', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { thresholds: { uncertain: 0.2, hallucinated: 0.7 } };',
+    );
+    const config = loadConfig();
+    expect(config.thresholds.uncertain).toBe(0.2);
+    expect(config.thresholds.hallucinated).toBe(0.7);
+  });
+
+  it('falls back to DEFAULT_THRESHOLDS when uncertain > hallucinated (inverted)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { thresholds: { uncertain: 0.8, hallucinated: 0.4 } };',
+    );
+    const config = loadConfig();
+    expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
+  });
+
+  it('falls back to DEFAULT_THRESHOLDS when uncertain is out of range', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { thresholds: { uncertain: -0.1, hallucinated: 0.6 } };',
+    );
+    const config = loadConfig();
+    expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
+  });
+
+  it('falls back to DEFAULT_THRESHOLDS when hallucinated is out of range', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { thresholds: { uncertain: 0.3, hallucinated: 1.5 } };',
+    );
+    const config = loadConfig();
+    expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
+  });
+
+  it('thresholds are preserved in frozen config', () => {
+    const config = loadConfig();
+    expect(Object.isFrozen(config.thresholds)).toBe(true);
   });
 });
 

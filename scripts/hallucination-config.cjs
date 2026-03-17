@@ -34,6 +34,17 @@ const DEFAULT_WEIGHTS = {
   completeness_claim: 0.2,
   // fabricated_source: reserved for future implementation (issue #18)
   evaluative_design_claim: 0.4,
+  internal_contradiction: 0.35,
+};
+
+/**
+ * Default score thresholds for three-tier label classification.
+ * - uncertain: scores >= this value are labelled UNCERTAIN (not GROUNDED)
+ * - hallucinated: scores > this value are labelled HALLUCINATED
+ */
+const DEFAULT_THRESHOLDS = {
+  uncertain: 0.3,
+  hallucinated: 0.6,
 };
 
 /**
@@ -41,6 +52,7 @@ const DEFAULT_WEIGHTS = {
  */
 const DEFAULT_CONFIG = {
   weights: DEFAULT_WEIGHTS,
+  thresholds: DEFAULT_THRESHOLDS,
   introspect: false,
   introspectOutputPath: null,
   // Global settings
@@ -323,6 +335,27 @@ function validateConfig(obj, source) {
       delete obj.weights;
     }
   }
+  // thresholds: { uncertain, hallucinated } both numbers in [0,1], uncertain <= hallucinated
+  if ('thresholds' in obj) {
+    const t = obj.thresholds;
+    const valid =
+      t !== null &&
+      typeof t === 'object' &&
+      !Array.isArray(t) &&
+      typeof t.uncertain === 'number' &&
+      Number.isFinite(t.uncertain) &&
+      t.uncertain >= 0 &&
+      t.uncertain <= 1 &&
+      typeof t.hallucinated === 'number' &&
+      Number.isFinite(t.hallucinated) &&
+      t.hallucinated >= 0 &&
+      t.hallucinated <= 1 &&
+      t.uncertain <= t.hallucinated;
+    if (!valid) {
+      warn('thresholds', JSON.stringify(t), DEFAULT_THRESHOLDS);
+      delete obj.thresholds;
+    }
+  }
   return obj;
 }
 
@@ -563,6 +596,7 @@ function loadConfig(_opts) {
   let config = {
     ...DEFAULT_CONFIG,
     weights: { ...DEFAULT_WEIGHTS },
+    thresholds: { ...DEFAULT_THRESHOLDS },
     categories: {},
     ignorePatterns: [],
     ignoreBlocks: [],
@@ -587,6 +621,25 @@ function loadConfig(_opts) {
   }
   config.weights = weights;
 
+  // Validate and normalise the thresholds field after all merges.
+  const t = config.thresholds;
+  const thresholdsValid =
+    t !== null &&
+    typeof t === 'object' &&
+    !Array.isArray(t) &&
+    typeof t.uncertain === 'number' &&
+    Number.isFinite(t.uncertain) &&
+    t.uncertain >= 0 &&
+    t.uncertain <= 1 &&
+    typeof t.hallucinated === 'number' &&
+    Number.isFinite(t.hallucinated) &&
+    t.hallucinated >= 0 &&
+    t.hallucinated <= 1 &&
+    t.uncertain <= t.hallucinated;
+  config.thresholds = thresholdsValid
+    ? { uncertain: t.uncertain, hallucinated: t.hallucinated }
+    : { ...DEFAULT_THRESHOLDS };
+
   return deepFreeze(config);
 }
 
@@ -599,4 +652,11 @@ function loadWeights() {
   return loadConfig().weights;
 }
 
-module.exports = { loadConfig, loadWeights, mergeConfig, DEFAULT_WEIGHTS, DEFAULT_CONFIG };
+module.exports = {
+  loadConfig,
+  loadWeights,
+  mergeConfig,
+  DEFAULT_WEIGHTS,
+  DEFAULT_THRESHOLDS,
+  DEFAULT_CONFIG,
+};
