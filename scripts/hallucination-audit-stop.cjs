@@ -1033,6 +1033,9 @@ function splitIntoSentences(text) {
  * @returns {Object<string, number>} An object mapping category names to `0` or `1`, where `1` indicates the category was triggered in the sentence.
  */
 function scoreSentence(sentence) {
+  // `internal_contradiction` detection requires >= 2 sentences and always returns []
+  // for a single sentence (early-return in detectInternalContradictions). The call is
+  // a no-op for that category — scores[internal_contradiction] will always be 0 here.
   const matches = findTriggerMatches(sentence);
   const scores = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
   for (const match of matches) {
