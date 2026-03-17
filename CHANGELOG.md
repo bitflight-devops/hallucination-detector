@@ -1,3 +1,9 @@
+## [1.12.2](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.1...v1.12.2) (2026-03-17)
+
+### Bug Fixes
+
+- **detection:** reduce false positives and improve block UX ([#44](https://github.com/bitflight-devops/hallucination-detector/issues/44)) ([b28c2ab](https://github.com/bitflight-devops/hallucination-detector/commit/b28c2ab87b6147cf092297c1a68379c2787d011f))
+
 ## [1.12.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.0...v1.12.1) (2026-03-16)
 
 ### Bug Fixes
