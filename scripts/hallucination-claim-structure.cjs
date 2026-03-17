@@ -19,8 +19,9 @@ const CLAIM_LABEL_ALTERNATION = 'VERIFIED|INFERRED|UNKNOWN|SPECULATION|CORRELATE
 // Regex to detect any label bracket in a line
 const LABEL_RE = new RegExp(`\\[(${CLAIM_LABEL_ALTERNATION})\\]`, 'g');
 
-// Regex to detect a structured response (has at least one label)
-const STRUCTURED_RE = new RegExp(`\\[(${CLAIM_LABEL_ALTERNATION})\\]`);
+// Regex to detect a structured response (has at least one label WITH a claim ID)
+// A bare label like [VERIFIED] without [cN] does NOT trigger structured mode.
+const STRUCTURED_RE = new RegExp(`\\[(${CLAIM_LABEL_ALTERNATION})\\]\\[c\\d+\\]`);
 
 // Timing-only evidence patterns: sentences dominated by temporal correlation with no mechanism
 // These patterns match the full structure of a timing-only claim so we can identify it
@@ -53,7 +54,35 @@ const VAGUE_EVIDENCE_RE =
 
 // Evidence prefix normalization — recognized concrete source prefixes
 const EVIDENCE_PREFIX_RE =
-  /^\s*(?:User|File|Log|Test|Doc|Tool|Transcript|Code|Command|Output|Error|Config|Trace|Repro):/i;
+  /^\s*(?:User|File|Log|Test|Doc|Tool|Transcript|Code|Command|Output|Error|Config|Trace|Repro|Observation|Result|Search|Glob|Grep|Read|Bash):/i;
+
+// Concrete substance markers for evidence quality check — hoisted to module scope
+// so the array is allocated once rather than on every hasConcreteSubstance() call.
+const SUBSTANCE_MARKERS = [
+  /[\w./-]+\.\w{1,6}(?::\d+)?/, // file paths
+  /\bline\s+\d+/i, // "line 42"
+  /\b(?:grep|glob|read|curl|git|npm|pnpm|node|bash|vitest|biome)\b/i, // tool/command names
+  /\b(?:error|exit)\s*(?:code)?\s*\d+/i, // error/exit codes
+  /\bHTTP\s*\d{3}\b/i, // HTTP status codes
+  /\b[A-Z]\d{3,4}\b/, // linter codes
+  /["'][^"']{3,}["']/, // quoted output
+  /\b(?:returned|showed|output|printed|logged|threw|raised|reported)\b/i, // observation verbs
+  /\d+\s+(?:files?|matches?|results?|lines?|items?|entries?|errors?)\b/i, // numeric results
+  /\b(?:stdout|stderr|traceback|exception|stack\s*trace)\b/i, // diagnostic refs
+];
+
+/**
+ * Check whether evidence content contains concrete verifiable markers even
+ * when no recognized prefix is present. Used as a fallback before emitting
+ * unnormalized_evidence so that naturally-phrased concrete evidence is not
+ * blocked purely for lacking a prefix keyword.
+ *
+ * @param {string} evidenceContent - Evidence text with the "Evidence:" prefix already stripped.
+ * @returns {boolean}
+ */
+function hasConcreteSubstance(evidenceContent) {
+  return SUBSTANCE_MARKERS.some((re) => re.test(evidenceContent));
+}
 
 /**
  * Check evidence content for vagueness and normalization.
@@ -74,12 +103,14 @@ function checkEvidenceQuality(evidenceContent, claimId, label) {
       message: `${label} evidence must cite a concrete source (a recognized prefix such as File:, Log:, Test:, Doc:, Tool:, User:, Transcript:, Code:, Command:, Output:, Error:, Config:, Trace:, Repro:), not "${evidenceContent}"`,
     });
   } else if (!EVIDENCE_PREFIX_RE.test(evidenceContent)) {
-    errors.push({
-      code: 'unnormalized_evidence',
-      claimId,
-      label,
-      message: `${label} evidence should use a recognized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:, Code:, Command:, Output:, Error:, Config:, Trace:, Repro:)`,
-    });
+    if (!hasConcreteSubstance(evidenceContent)) {
+      errors.push({
+        code: 'unnormalized_evidence',
+        claimId,
+        label,
+        message: `${label} evidence should use a recognized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:, Code:, Command:, Output:, Error:, Config:, Trace:, Repro:, Observation:, Result:, Search:, Glob:, Grep:, Read:, Bash:) or contain concrete verifiable markers`,
+      });
+    }
   }
   return errors;
 }
@@ -368,12 +399,14 @@ function validateClaimStructure(text) {
                 });
               }
             } else if (!EVIDENCE_PREFIX_RE.test(evidenceContent)) {
-              errors.push({
-                code: 'unnormalized_evidence',
-                claimId: claim.id,
-                label: 'CAUSAL',
-                message: `CAUSAL evidence should use a recognized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:, Code:, Command:, Output:, Error:, Config:, Trace:, Repro:)`,
-              });
+              if (!hasConcreteSubstance(evidenceContent)) {
+                errors.push({
+                  code: 'unnormalized_evidence',
+                  claimId: claim.id,
+                  label: 'CAUSAL',
+                  message: `CAUSAL evidence should use a recognized prefix (File:, Log:, Test:, Doc:, Tool:, User:, Transcript:, Code:, Command:, Output:, Error:, Config:, Trace:, Repro:, Observation:, Result:, Search:, Glob:, Grep:, Read:, Bash:) or contain concrete verifiable markers`,
+                });
+              }
             }
           }
         }
@@ -494,8 +527,10 @@ module.exports = {
   parseMemoryWriteSection,
   extractAnswerLines,
   detectUnlabeledClaims,
+  hasConcreteSubstance,
   // Exported regex constants for testing
   CLAIM_SUBSTANTIVE_RE,
   VAGUE_EVIDENCE_RE,
   EVIDENCE_PREFIX_RE,
+  STRUCTURED_RE,
 };
