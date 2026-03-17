@@ -1,6 +1,10 @@
 'use strict';
 
-const { validateClaimStructure } = require('../scripts/hallucination-claim-structure.cjs');
+const {
+  validateClaimStructure,
+  hasConcreteSubstance,
+  STRUCTURED_RE,
+} = require('../scripts/hallucination-claim-structure.cjs');
 const { computeMemoryGate } = require('../scripts/hallucination-memory-gate.cjs');
 
 // =============================================================================
@@ -43,6 +47,71 @@ MEMORY WRITE
 - Blocked: c1`;
     const result = validateClaimStructure(text);
     expect(result.structured).toBe(true);
+  });
+});
+
+// =============================================================================
+// STRUCTURED_RE — bare label does not trigger structured mode
+// =============================================================================
+describe('validateClaimStructure — bare label adoption cliff fix', () => {
+  it('STRUCTURED_RE does not match a bare [VERIFIED] without claim ID', () => {
+    expect(STRUCTURED_RE.test('[VERIFIED] The symlinks are gone')).toBe(false);
+  });
+
+  it('STRUCTURED_RE matches [VERIFIED][c1] with claim ID', () => {
+    expect(STRUCTURED_RE.test('[VERIFIED][c1] The symlinks are gone')).toBe(true);
+  });
+
+  it('bare [VERIFIED] without claim ID returns structured:false, valid:true', () => {
+    const text = 'The symlinks are gone. [VERIFIED] The directory listing is clean.';
+    const result = validateClaimStructure(text);
+    expect(result.structured).toBe(false);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('multiple bare labels without claim IDs return structured:false', () => {
+    const text = [
+      'The fix is in place.',
+      '[VERIFIED] The symlinks are gone.',
+      '[INFERRED] The service will restart cleanly.',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.structured).toBe(false);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('mixed bare and formal labels: at least one [LABEL][cN] returns structured:true', () => {
+    const text = [
+      'ANSWER',
+      '- Task acknowledged.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The config file exists at /etc/app.json',
+      '  Evidence: File: /etc/app.json confirmed via Read tool.',
+      '',
+      '[INFERRED] The service may restart — bare label, no ID.',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked: (none)',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.structured).toBe(true);
+  });
+
+  it('informal [VERIFIED] label in prose does not block (regression: adoption cliff)', () => {
+    const text = [
+      'I checked the directory.',
+      '[VERIFIED] The symlinks are gone.',
+      'No further action needed.',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+    // Must not produce missing_memory_write_section
+    expect(result.errors.some((e) => e.code === 'missing_memory_write_section')).toBe(false);
   });
 });
 
@@ -419,11 +488,11 @@ describe('validateClaimStructure — vague_verified_evidence', () => {
 // unnormalized_evidence — evidence prefix validation
 // =============================================================================
 describe('validateClaimStructure — unnormalized_evidence', () => {
-  it('VERIFIED with unprefixed evidence produces unnormalized_evidence', () => {
+  it('VERIFIED with unprefixed vague evidence produces unnormalized_evidence', () => {
     const text = [
       'VERIFIED',
       '- [VERIFIED][c1] The retry logic has a nil dereference',
-      '  Evidence: stack trace shows panic at line 88',
+      '  Evidence: the analysis confirmed the finding',
       '',
       'MEMORY WRITE',
       '- Allowed: c1',
@@ -445,6 +514,128 @@ describe('validateClaimStructure — unnormalized_evidence', () => {
     ].join('\n');
     const result = validateClaimStructure(text);
     expect(result.errors.filter((e) => e.code === 'unnormalized_evidence')).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// hasConcreteSubstance — unit tests
+// =============================================================================
+describe('hasConcreteSubstance', () => {
+  it('returns true for tool name + numeric result', () => {
+    expect(hasConcreteSubstance('Glob output shows 18 files returned')).toBe(true);
+  });
+
+  it('returns true for stack trace + line reference', () => {
+    expect(hasConcreteSubstance('stack trace shows panic at line 88')).toBe(true);
+  });
+
+  it('returns true for file path', () => {
+    expect(hasConcreteSubstance('/etc/app/config.json exists and contains the key')).toBe(true);
+  });
+
+  it('returns true for HTTP status code + observation verb', () => {
+    expect(hasConcreteSubstance('HTTP 404 returned from the endpoint')).toBe(true);
+  });
+
+  it('returns false for vague check phrase', () => {
+    expect(hasConcreteSubstance('I checked and it looks correct')).toBe(false);
+  });
+
+  it('returns false for vague analysis phrase', () => {
+    expect(hasConcreteSubstance('the analysis confirmed the finding')).toBe(false);
+  });
+
+  it('returns false for empty string', () => {
+    expect(hasConcreteSubstance('')).toBe(false);
+  });
+});
+
+// =============================================================================
+// unnormalized_evidence — integration tests with hasConcreteSubstance fallback
+// =============================================================================
+describe('validateClaimStructure — unnormalized_evidence with concrete substance fallback', () => {
+  it('VERIFIED with "Glob output shows 18 files returned" (no prefix, has substance) passes', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] The agents directory contains 18 files',
+      '  Evidence: Glob output shows 18 files returned',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.filter((e) => e.code === 'unnormalized_evidence')).toHaveLength(0);
+  });
+
+  it('VERIFIED with "I checked and it\'s fine" (no prefix, no substance) produces unnormalized_evidence', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] The configuration is correct',
+      "  Evidence: I checked and it's fine",
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.some((e) => e.code === 'unnormalized_evidence')).toBe(true);
+  });
+
+  it('VERIFIED with "Tool: Glob shows 18 files" (has prefix) passes', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] The agents directory contains 18 files',
+      '  Evidence: Tool: Glob shows 18 files',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.filter((e) => e.code === 'unnormalized_evidence')).toHaveLength(0);
+  });
+
+  it('new prefix Glob: passes', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] The agents directory contains 18 files',
+      '  Evidence: Glob: .claude/agents/*.md returned 18 files',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.filter((e) => e.code === 'unnormalized_evidence')).toHaveLength(0);
+  });
+
+  it('new prefix Observation: passes', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] No symlinks are present in the directory',
+      '  Evidence: Observation: directory listing shows no symlinks',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.filter((e) => e.code === 'unnormalized_evidence')).toHaveLength(0);
+  });
+
+  it('vague evidence still produces vague_verified_evidence (regression)', () => {
+    const text = [
+      'VERIFIED',
+      '- [VERIFIED][c1] All prompt hooks are on SubagentStop',
+      '  Evidence: Explore agent findings reported in this session',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked:',
+    ].join('\n');
+    const result = validateClaimStructure(text);
+    expect(result.errors.some((e) => e.code === 'vague_verified_evidence')).toBe(true);
   });
 });
 

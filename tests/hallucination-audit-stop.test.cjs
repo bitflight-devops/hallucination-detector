@@ -21,6 +21,9 @@ const {
   DEFAULT_WEIGHTS,
   stripLabeledClaimLines,
   buildStructuralBlockReason,
+  buildCombinedBlockReason,
+  isNegatedParticiple,
+  isWithinUncertaintyEnumeration,
 } = require('../scripts/hallucination-audit-stop.cjs');
 
 const SCRIPT_PATH = path.resolve(__dirname, '../scripts/hallucination-audit-stop.cjs');
@@ -327,6 +330,103 @@ describe('completeness claims', () => {
       (m) => m.kind === 'completeness_claim' && m.evidence.startsWith('All issues have been'),
     );
     expect(structuralMatches.length).toBe(0);
+  });
+
+  // Negated participle suppression
+  it('does not flag "completely unverified" (un- prefix)', () => {
+    const matches = findTriggerMatches('The data is completely unverified.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim')).toHaveLength(0);
+  });
+
+  it('does not flag "fully untested" (un- prefix)', () => {
+    const matches = findTriggerMatches('This code path is fully untested.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim')).toHaveLength(0);
+  });
+
+  it('does not flag "completely unresolved" (un- prefix)', () => {
+    const matches = findTriggerMatches('The issue remains completely unresolved.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim')).toHaveLength(0);
+  });
+
+  it('does not flag "fully unconfirmed" (un- prefix)', () => {
+    const matches = findTriggerMatches('The report is fully unconfirmed.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim')).toHaveLength(0);
+  });
+
+  it('does not flag "completely disconnected" (dis- prefix)', () => {
+    const matches = findTriggerMatches('These modules are completely disconnected.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim')).toHaveLength(0);
+  });
+
+  it('does not flag "not fully verified" (explicit negation precedes)', () => {
+    const matches = findTriggerMatches('This has not fully verified the fix.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim')).toHaveLength(0);
+  });
+
+  it('does not flag "never fully tested" (explicit negation precedes)', () => {
+    const matches = findTriggerMatches('This path was never fully tested.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim')).toHaveLength(0);
+  });
+
+  it('still flags "fully resolved" (affirmative overclaim)', () => {
+    const matches = findTriggerMatches('The bug is fully resolved.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim').length).toBeGreaterThan(0);
+  });
+
+  it('still flags "completely fixed" (affirmative overclaim)', () => {
+    const matches = findTriggerMatches('The issue is completely fixed.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim').length).toBeGreaterThan(0);
+  });
+
+  it('still flags "fully implemented" (affirmative overclaim)', () => {
+    const matches = findTriggerMatches('The feature is fully implemented.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim').length).toBeGreaterThan(0);
+  });
+
+  it('still flags "completely done" (affirmative overclaim)', () => {
+    const matches = findTriggerMatches('The task is completely done.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim').length).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// isNegatedParticiple unit tests
+// =============================================================================
+describe('isNegatedParticiple', () => {
+  it('returns true for un- prefixed participle', () => {
+    expect(isNegatedParticiple('fully unverified', 'The data is fully unverified.', 11)).toBe(true);
+  });
+
+  it('returns true for dis- prefixed participle', () => {
+    expect(
+      isNegatedParticiple('completely disconnected', 'They are completely disconnected.', 9),
+    ).toBe(true);
+  });
+
+  it('returns true for non- prefixed participle', () => {
+    expect(isNegatedParticiple('fully noncomplied', 'It is fully noncomplied.', 6)).toBe(true);
+  });
+
+  it('returns false for affirmative participle "resolved"', () => {
+    expect(isNegatedParticiple('fully resolved', 'The bug is fully resolved.', 11)).toBe(false);
+  });
+
+  it('returns false for affirmative participle "implemented"', () => {
+    expect(isNegatedParticiple('fully implemented', 'The feature is fully implemented.', 15)).toBe(
+      false,
+    );
+  });
+
+  it('returns true when preceded by "not"', () => {
+    const text = 'This has not fully verified the fix.';
+    const idx = text.indexOf('fully');
+    expect(isNegatedParticiple('fully verified', text, idx)).toBe(true);
+  });
+
+  it('returns true when preceded by "never"', () => {
+    const text = 'This path was never fully tested.';
+    const idx = text.indexOf('fully');
+    expect(isNegatedParticiple('fully tested', text, idx)).toBe(true);
   });
 });
 
@@ -1626,5 +1726,540 @@ describe('last_assistant_message stdin field', () => {
     expect(stdout.trim().length).toBeGreaterThan(0);
     const parsed = JSON.parse(stdout.trim());
     expect(parsed.decision).toBe('block');
+  });
+});
+
+describe('isWithinUncertaintyEnumeration — unit tests', () => {
+  it('returns true when "I don\'t know" precedes within window', () => {
+    const text = "I don't know if the agent list is cached, could be something else entirely";
+    const idx = text.indexOf('could be');
+    expect(isWithinUncertaintyEnumeration(text, idx)).toBe(true);
+  });
+
+  it('returns true when "cannot confirm" precedes within window', () => {
+    const text = 'I cannot confirm the exact version, could be 3.x or 4.x';
+    const idx = text.indexOf('could be');
+    expect(isWithinUncertaintyEnumeration(text, idx)).toBe(true);
+  });
+
+  it('returns false when no uncertainty marker is present', () => {
+    const text = 'This is probably a race condition.';
+    const idx = text.indexOf('probably');
+    expect(isWithinUncertaintyEnumeration(text, idx)).toBe(false);
+  });
+
+  it('returns false when marker is separated by a paragraph break (\\n\\n)', () => {
+    const text = "I don't know the full history.\n\nThis is probably a race condition.";
+    const idx = text.indexOf('probably');
+    expect(isWithinUncertaintyEnumeration(text, idx)).toBe(false);
+  });
+
+  it('returns false when marker is beyond the 200-char preceding window', () => {
+    const farMarker = `I don't know. ${'x'.repeat(210)}`;
+    const text = `${farMarker} probably a race condition.`;
+    const idx = text.indexOf('probably');
+    expect(isWithinUncertaintyEnumeration(text, idx)).toBe(false);
+  });
+
+  it('returns true when marker follows the phrase within the 80-char following window', () => {
+    const text = "It could be a caching issue, I don't know for certain";
+    const idx = text.indexOf('could be');
+    expect(isWithinUncertaintyEnumeration(text, idx)).toBe(true);
+  });
+});
+
+describe('speculation_language — uncertainty enumeration suppression', () => {
+  it('does not flag "could be" when preceded by "I don\'t know"', () => {
+    const matches = findTriggerMatches(
+      "I don't know if the agent list is cached, could be something else entirely",
+    );
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches).toHaveLength(0);
+  });
+
+  it('does not flag "maybe" when preceded by "not sure"', () => {
+    const matches = findTriggerMatches(
+      "I'm not sure about the root cause, maybe the config is stale",
+    );
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches).toHaveLength(0);
+  });
+
+  it('does not flag "might be" when preceded by "unclear whether"', () => {
+    const matches = findTriggerMatches(
+      "It's unclear whether the timeout applies here, might be a different setting",
+    );
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches).toHaveLength(0);
+  });
+
+  it('does not flag "probably" when preceded by "I haven\'t verified"', () => {
+    const matches = findTriggerMatches(
+      "I haven't verified this yet, but it's probably in the auth module",
+    );
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches).toHaveLength(0);
+  });
+
+  it('does not flag "could be" when preceded by "cannot confirm"', () => {
+    const matches = findTriggerMatches('I cannot confirm the exact version, could be 3.x or 4.x');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches).toHaveLength(0);
+  });
+
+  it('does not flag "could be" when trailing marker "I don\'t know for certain" follows', () => {
+    const matches = findTriggerMatches("It could be a caching issue, I don't know for certain");
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches).toHaveLength(0);
+  });
+
+  it('still flags bare "probably" with no uncertainty marker', () => {
+    const matches = findTriggerMatches('This is probably a race condition.');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBeGreaterThan(0);
+  });
+
+  it('still flags "could be" when no uncertainty marker is present', () => {
+    const matches = findTriggerMatches('The fix works. This could be improved further.');
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBeGreaterThan(0);
+  });
+
+  it('still flags "probably" when marker is separated by a paragraph break', () => {
+    const matches = findTriggerMatches(
+      "I don't know the full history.\n\nThis is probably a race condition.",
+    );
+    const specMatches = matches.filter((m) => m.kind === 'speculation_language');
+    expect(specMatches.length).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// buildCombinedBlockReason
+// =============================================================================
+describe('buildCombinedBlockReason', () => {
+  it('includes BLOCK_HEADER once', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const matches = [{ kind: 'speculation_language', evidence: 'probably' }];
+    const reason = buildCombinedBlockReason(errors, matches);
+    expect(reason).toContain('Hallucination-detector STOP HOOK blocked this response.');
+    // BLOCK_HEADER must appear exactly once
+    const occurrences =
+      reason.split('Hallucination-detector STOP HOOK blocked this response.').length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it('includes structural section header', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const matches = [{ kind: 'causality_language', evidence: 'because' }];
+    const reason = buildCombinedBlockReason(errors, matches);
+    expect(reason).toContain('Structural claim validation issues:');
+  });
+
+  it('includes trigger section header', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const matches = [{ kind: 'causality_language', evidence: 'because' }];
+    const reason = buildCombinedBlockReason(errors, matches);
+    expect(reason).toContain('Trigger language issues:');
+  });
+
+  it('formats structural error with claimId and label', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const matches = [{ kind: 'speculation_language', evidence: 'probably' }];
+    const reason = buildCombinedBlockReason(errors, matches);
+    expect(reason).toContain('[missing_evidence] c1 [VERIFIED]: VERIFIED claims require Evidence:');
+  });
+
+  it('formats trigger match with kind and evidence in backticks', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const matches = [{ kind: 'speculation_language', evidence: 'probably' }];
+    const reason = buildCombinedBlockReason(errors, matches);
+    expect(reason).toContain('- speculation_language: `probably`');
+  });
+
+  it('includes "Fix ALL of the above" instruction', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const matches = [{ kind: 'causality_language', evidence: 'because' }];
+    const reason = buildCombinedBlockReason(errors, matches);
+    expect(reason).toContain('Fix ALL of the above in your rewrite.');
+  });
+
+  it('includes structured block format template (ANSWER and MEMORY WRITE)', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const matches = [{ kind: 'speculation_language', evidence: 'probably' }];
+    const reason = buildCombinedBlockReason(errors, matches);
+    expect(reason).toContain('ANSWER');
+    expect(reason).toContain('MEMORY WRITE');
+  });
+
+  it('slices to max 5 structural errors', () => {
+    const errors = Array.from({ length: 8 }, (_, i) => ({
+      code: 'missing_evidence',
+      claimId: `c${i + 1}`,
+      label: 'VERIFIED',
+      message: `Missing evidence (${i + 1})`,
+    }));
+    const matches = [{ kind: 'speculation_language', evidence: 'probably' }];
+    const reason = buildCombinedBlockReason(errors, matches);
+    const errorLineCount = reason
+      .split('\n')
+      .filter((l) => l.startsWith('- [missing_evidence]')).length;
+    expect(errorLineCount).toBe(5);
+  });
+
+  it('slices to max 4 trigger matches', () => {
+    const matches = [
+      { kind: 'speculation_language', evidence: 'probably' },
+      { kind: 'causality_language', evidence: 'because' },
+      { kind: 'completeness_claim', evidence: 'fully resolved' },
+      { kind: 'evaluative_design_claim', evidence: 'the cleanest fix' },
+      { kind: 'pseudo_quantification', evidence: '8/10' },
+    ];
+    const errors = [
+      { code: 'missing_evidence', claimId: 'c1', label: 'VERIFIED', message: 'Missing evidence' },
+    ];
+    const reason = buildCombinedBlockReason(errors, matches);
+    // Count lines that start with "- <kind>:" pattern (trigger match lines)
+    const matchLineCount = reason.split('\n').filter((l) => /^- \w+: `/.test(l)).length;
+    expect(matchLineCount).toBe(4);
+  });
+
+  it('does not re-trigger findTriggerMatches (self-trigger guard)', () => {
+    const errors = [
+      {
+        code: 'missing_evidence',
+        claimId: 'c1',
+        label: 'VERIFIED',
+        message: 'VERIFIED claims require Evidence:',
+      },
+    ];
+    const matches = [
+      { kind: 'speculation_language', evidence: 'probably' },
+      { kind: 'causality_language', evidence: 'because' },
+    ];
+    const reason = buildCombinedBlockReason(errors, matches);
+    const secondPassMatches = findTriggerMatches(reason);
+    expect(secondPassMatches.length).toBe(0);
+  });
+});
+
+// =============================================================================
+// Combined validation — both structural errors and trigger matches in one pass
+// =============================================================================
+describe('combined validation (structural + trigger in one block)', () => {
+  let transcriptPath;
+  let stateFilePath;
+
+  afterEach(() => {
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+    if (stateFilePath && fs.existsSync(stateFilePath)) {
+      fs.unlinkSync(stateFilePath);
+    }
+    transcriptPath = undefined;
+    stateFilePath = undefined;
+  });
+
+  it('reports both structural errors and trigger phrases in a single block', () => {
+    const assistantText = [
+      'ANSWER',
+      '- This is probably the correct approach.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The file exists at scripts/foo.cjs',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked: (none)',
+    ].join('\n');
+
+    transcriptPath = makeTempTranscript(assistantText);
+    const { stdout } = runHook({
+      session_id: `test-combined-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim().length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.decision).toBe('block');
+    expect(parsed.reason).toContain('Structural claim validation issues:');
+    expect(parsed.reason).toContain('Trigger language issues:');
+  });
+
+  it('combined block reason does not re-trigger findTriggerMatches', () => {
+    const assistantText = [
+      'ANSWER',
+      '- This is probably the correct approach.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The file exists at scripts/foo.cjs',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked: (none)',
+    ].join('\n');
+
+    transcriptPath = makeTempTranscript(assistantText);
+    const { stdout } = runHook({
+      session_id: `test-combined-selfguard-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    const parsed = JSON.parse(stdout.trim());
+    const secondPassMatches = findTriggerMatches(parsed.reason);
+    expect(secondPassMatches.length).toBe(0);
+  });
+});
+
+// =============================================================================
+// maxBlocksPerSession wired from config
+// =============================================================================
+describe('maxBlocksPerSession from config', () => {
+  let transcriptPath;
+  let stateFilePath;
+  let tmpDir;
+  let originalCwd;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-maxblocks-'));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+    if (stateFilePath && fs.existsSync(stateFilePath)) {
+      fs.unlinkSync(stateFilePath);
+    }
+    fs.rmSync(tmpDir, { recursive: true });
+    transcriptPath = undefined;
+    stateFilePath = undefined;
+  });
+
+  it('allows through after maxBlocksPerSession=1 when stop_hook_active is true', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { maxBlocksPerSession: 1 };',
+    );
+
+    const sessionId = `test-maxblocks-1-${Date.now()}`;
+    stateFilePath = path.join(os.tmpdir(), `claude-hallucination-audit-${sessionId}.json`);
+    fs.writeFileSync(stateFilePath, JSON.stringify({ blocks: 1 }), 'utf-8');
+
+    transcriptPath = makeTempTranscript('I think this is correct.');
+    const { stdout } = runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      stop_hook_active: true,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('still blocks when blocks count has not exceeded maxBlocksPerSession=1', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { maxBlocksPerSession: 1 };',
+    );
+
+    const sessionId = `test-maxblocks-1-under-${Date.now()}`;
+    stateFilePath = path.join(os.tmpdir(), `claude-hallucination-audit-${sessionId}.json`);
+    fs.writeFileSync(stateFilePath, JSON.stringify({ blocks: 0 }), 'utf-8');
+
+    transcriptPath = makeTempTranscript('I think this is correct.');
+    const { stdout } = runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      stop_hook_active: true,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim().length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.decision).toBe('block');
+  });
+
+  it('allows through after maxBlocksPerSession=5 at block count 5 with stop_hook_active', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { maxBlocksPerSession: 5 };',
+    );
+
+    const sessionId = `test-maxblocks-5-${Date.now()}`;
+    stateFilePath = path.join(os.tmpdir(), `claude-hallucination-audit-${sessionId}.json`);
+    fs.writeFileSync(stateFilePath, JSON.stringify({ blocks: 5 }), 'utf-8');
+
+    transcriptPath = makeTempTranscript('I think this is correct.');
+    const { stdout } = runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      stop_hook_active: true,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('defaults to maxBlocksPerSession=2 when config has no maxBlocksPerSession', () => {
+    const sessionId = `test-maxblocks-default-${Date.now()}`;
+    stateFilePath = path.join(os.tmpdir(), `claude-hallucination-audit-${sessionId}.json`);
+    fs.writeFileSync(stateFilePath, JSON.stringify({ blocks: 2 }), 'utf-8');
+
+    transcriptPath = makeTempTranscript('I think this is correct.');
+    const { stdout } = runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      stop_hook_active: true,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim()).toBe('');
+  });
+});
+
+// =============================================================================
+// Introspection mode with combined validation
+// =============================================================================
+describe('introspection mode with combined validation', () => {
+  let transcriptPath;
+  let tmpDir;
+  let originalCwd;
+  let logPath;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hd-introspect-'));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+    logPath = path.join(tmpDir, 'introspect.jsonl');
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+    fs.rmSync(tmpDir, { recursive: true });
+    transcriptPath = undefined;
+  });
+
+  it('does not block in introspection mode even with both structural and trigger errors', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      `module.exports = { introspect: true, introspectOutputPath: ${JSON.stringify(logPath)} };`,
+    );
+
+    const assistantText = [
+      'ANSWER',
+      '- This is probably the correct approach.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The file exists at scripts/foo.cjs',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked: (none)',
+    ].join('\n');
+
+    transcriptPath = makeTempTranscript(assistantText);
+    const { stdout } = runHook({
+      session_id: `test-introspect-combined-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('writes introspection log entry with structuralErrorCount when structured+invalid', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      `module.exports = { introspect: true, introspectOutputPath: ${JSON.stringify(logPath)} };`,
+    );
+
+    const assistantText = [
+      'ANSWER',
+      '- Task acknowledged.',
+      '',
+      'VERIFIED',
+      '- [VERIFIED][c1] The file exists.',
+      '',
+      'MEMORY WRITE',
+      '- Allowed: c1',
+      '- Blocked: (none)',
+    ].join('\n');
+
+    transcriptPath = makeTempTranscript(assistantText);
+    runHook({
+      session_id: `test-introspect-log-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    expect(fs.existsSync(logPath)).toBe(true);
+    const logLines = fs.readFileSync(logPath, 'utf-8').trim().split('\n');
+    expect(logLines.length).toBeGreaterThan(0);
+    const entry = JSON.parse(logLines[0]);
+    expect(entry).toHaveProperty('structuralErrorCount');
+    expect(typeof entry.structuralErrorCount).toBe('number');
   });
 });

@@ -230,6 +230,27 @@ function isQualityScore(text, matchStr, matchIndex) {
 // Global flag required for String.prototype.match to return all matches.
 const LIST_ITEM_RE = /^\s*(?:\d+[.)]\s|\*\s|-\s)/gm;
 
+// Uncertainty markers — phrases that signal the assistant is explicitly disclosing
+// what it does NOT know. When a speculation phrase appears near these markers,
+// the speculation serves a disclosure function, not a speculative-assertion function.
+const UNCERTAINTY_MARKERS = [
+  /\bi\s+don'?t\s+know\b/i,
+  /\bi\s+haven'?t\s+(?:verified|confirmed|checked|tested|validated)\b/i,
+  /\bunclear\s+(?:whether|if|what|why|how)\b/i,
+  /\bunknown\s+(?:whether|if|what|why|how|at\s+this\s+time)\b/i,
+  /\bnot\s+sure\s+(?:if|whether|what|why|how|about)\b/i,
+  /\bhaven'?t\s+confirmed\b/i,
+  /\bcannot\s+(?:confirm|verify|determine)\b/i,
+  /\bcan'?t\s+(?:confirm|verify|determine)\b/i,
+  /\bnot\s+(?:yet\s+)?(?:confirmed|verified|determined|established)\b/i,
+  /\bremains\s+(?:unclear|unknown|unverified|unconfirmed)\b/i,
+  /\bno\s+evidence\s+(?:that|of|for)\b/i,
+  /\bunable\s+to\s+(?:confirm|verify|determine)\b/i,
+  /\bopen\s+question\b/i,
+  /\bneed(?:s)?\s+to\s+(?:verify|confirm|check|investigate|determine)\b/i,
+  /\bi\s+have\s+not\s+(?:verified|confirmed|checked|tested)\b/i,
+];
+
 // Change 5: hasEnumerationNearby — suppresses structural completeness flags when
 // the preceding context contains a numbered/bulleted list (2+ items).
 function hasEnumerationNearby(text, idx) {
@@ -237,6 +258,66 @@ function hasEnumerationNearby(text, idx) {
   const preceding = text.slice(start, idx);
   const allMatches = preceding.match(LIST_ITEM_RE);
   return allMatches !== null && allMatches.length >= 2;
+}
+
+/**
+ * Returns true when a speculation phrase appears within an explicit uncertainty
+ * enumeration — the assistant is disclosing unknowns, not making speculative assertions.
+ *
+ * Uses a window-based approach (200 chars preceding, 80 following) with a
+ * paragraph-break guard to prevent cross-paragraph leakage.
+ *
+ * @param {string} text - The haystack text.
+ * @param {number} idx - Character index of the speculation phrase.
+ * @param {number} [precedingWindow=200] - Chars to look back.
+ * @param {number} [followingWindow=80] - Chars to look ahead.
+ * @returns {boolean}
+ */
+function isWithinUncertaintyEnumeration(text, idx, precedingWindow = 200, followingWindow = 80) {
+  const start = Math.max(0, idx - precedingWindow);
+  const end = Math.min(text.length, idx + followingWindow);
+  const window = text.slice(start, end);
+  const idxInWindow = idx - start;
+
+  for (const re of UNCERTAINTY_MARKERS) {
+    const match = window.match(re);
+    if (!match) continue;
+    const markerPos = match.index;
+    // Check no paragraph break between marker and speculation phrase
+    const segStart = Math.min(markerPos, idxInWindow);
+    const segEnd = Math.max(markerPos + match[0].length, idxInWindow);
+    const between = window.slice(segStart, segEnd);
+    if (/\n\n/.test(between)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Returns true when a "fully/completely + participle" match is a negation/disclaimer.
+ * E.g., "completely unverified" disclaims completeness; "fully resolved" claims it.
+ *
+ * @param {string} matchedText - The regex match (e.g., "completely unverified").
+ * @param {string} fullText - The full haystack text.
+ * @param {number} matchIndex - The character index of the match in fullText.
+ * @returns {boolean}
+ */
+function isNegatedParticiple(matchedText, fullText, matchIndex) {
+  const words = matchedText.trim().split(/\s+/);
+  const participle = words[words.length - 1].toLowerCase();
+
+  // Safe prefixes where removal reliably indicates negation
+  if (/^(?:un|non|dis)\w+(?:ed|d)$/i.test(participle)) {
+    return true;
+  }
+
+  // Explicit negation preceding the adverb: "not fully verified", "never fully tested"
+  const precedingWindow = fullText.slice(Math.max(0, matchIndex - 15), matchIndex).toLowerCase();
+  if (/\b(?:not|never|no)\s*$/.test(precedingWindow)) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -361,6 +442,9 @@ function findTriggerMatches(text, config = {}) {
             const lastWord = before.slice(before.lastIndexOf(' ') + 1);
             if (PERMISSIVE_MAY_PRONOUNS.has(lastWord)) continue;
           }
+          // Suppress when the phrase appears within an explicit uncertainty enumeration —
+          // the assistant is transparently disclosing what it does not know.
+          if (isWithinUncertaintyEnumeration(haystack, idx)) continue;
           matches.push({ kind: 'speculation_language', evidence: phrase });
           break; // one flag per phrase kind is sufficient
         }
@@ -596,6 +680,9 @@ function findTriggerMatches(text, config = {}) {
         if (isIndexWithinQuestion(haystack, m.index)) continue;
         // Suppress when inside an enumeration list (Change 5)
         if (hasEnumerationNearby(haystack, m.index)) continue;
+        // Suppress negated participles after fully/completely (disclaimers, not overclaims)
+        if (/^(?:fully|completely)\s/i.test(m[0]) && isNegatedParticiple(m[0], haystack, m.index))
+          continue;
         matches.push({ kind: 'completeness_claim', evidence: m[0].trim() });
       }
     }
@@ -860,12 +947,14 @@ const BLOCK_HEADER = 'Hallucination-detector STOP HOOK blocked this response.';
  * @param {string} sessionId
  * @param {boolean} stopHookActive
  * @param {string} reason
+ * @param {number} [maxBlocks] - Maximum number of blocks before allowing through. Defaults to 2.
  */
-function blockAndExit(sessionId, stopHookActive, reason) {
+function blockAndExit(sessionId, stopHookActive, reason, maxBlocks) {
   const { statePath, data } = loadLoopState(sessionId);
   const nextBlocks = Number(data.blocks || 0) + 1;
   saveLoopState(statePath, { blocks: nextBlocks });
-  if (nextBlocks > 2 && stopHookActive) {
+  const limit = typeof maxBlocks === 'number' && maxBlocks >= 0 ? maxBlocks : 2;
+  if (nextBlocks > limit && stopHookActive) {
     process.exit(0);
   }
   emitJson({ decision: 'block', reason });
@@ -931,6 +1020,47 @@ function buildBlockReason(matches) {
 }
 
 /**
+ * Build a combined block reason when both structural validation errors and
+ * trigger phrase matches are present. Emits both sections under one BLOCK_HEADER
+ * so the assistant can fix everything in a single rewrite.
+ *
+ * @param {Array<{code: string, claimId?: string, label?: string, message: string}>} errors
+ * @param {Array<{kind: string, evidence: string}>} matches
+ * @returns {string}
+ */
+function buildCombinedBlockReason(errors, matches) {
+  const errorLines = errors
+    .slice(0, 5)
+    .map((e) => {
+      const prefix = e.claimId
+        ? `[${e.code}] ${e.claimId}${e.label ? ` [${e.label}]` : ''}`
+        : `[${e.code}]`;
+      return `- ${prefix}: ${e.message}`;
+    })
+    .join('\n');
+
+  const matchLines = matches
+    .slice(0, 4)
+    .map((m) => `- ${m.kind}: \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``)
+    .join('\n');
+
+  return [
+    BLOCK_HEADER,
+    '',
+    'Structural claim validation issues:',
+    errorLines || '- (no error details available)',
+    '',
+    'Trigger language issues:',
+    matchLines || '- (no snippets available)',
+    '',
+    'Fix ALL of the above in your rewrite.',
+    '',
+    'Rewrite using the required structured format:',
+    STRUCTURED_BLOCK_FORMAT,
+  ].join('\n');
+}
+
+/**
  * Run the STOP hook: read stdin JSON, analyze the last main-chain assistant message for hallucination signals, and either emit a block decision or exit without blocking.
  *
  * When a transcript path is present, the function extracts the last assistant message, applies configured pattern detection and scoring, and:
@@ -986,49 +1116,52 @@ function main() {
   }
 
   const config = loadConfig();
+  const maxBlocks = config.maxBlocksPerSession ?? 2;
 
-  // Structure-aware detection: validate labeled claim structure first.
+  // Two-layer combined detection: collect structural errors and trigger matches
+  // in a single pass before deciding whether to block. This prevents the
+  // consecutive-block UX problem where the assistant fixes structural errors,
+  // resubmits, and gets blocked again by trigger phrases that were present
+  // but never reported in the first block.
   const structureResult = validateClaimStructure(lastAssistantText);
+
+  let structuralErrors = [];
+  let triggerMatches = [];
 
   if (structureResult.structured) {
     if (!structureResult.valid) {
-      // Block on structural validation failure — loop state still applies.
-      blockAndExit(sessionId, stopHookActive, buildStructuralBlockReason(structureResult.errors));
+      // Structural errors present — also run trigger detection on the raw text
+      // (labels are invalid, so don't strip them — the whole response is suspect).
+      structuralErrors = structureResult.errors;
+      triggerMatches = findTriggerMatches(lastAssistantText, config);
+    } else {
+      // Structured + valid: run trigger audit on text with labeled claim lines
+      // stripped so acknowledged typed claims don't re-fire speculation/causality detectors.
+      const strippedText = stripLabeledClaimLines(lastAssistantText);
+      triggerMatches = findTriggerMatches(strippedText, config);
     }
-
-    // Structured + valid: run trigger audit on text with labeled claim lines stripped
-    // so acknowledged typed claims don't re-fire speculation/causality detectors.
-    const strippedText = stripLabeledClaimLines(lastAssistantText);
-    const matches = findTriggerMatches(strippedText, config);
-
-    if (matches.length === 0) {
-      const { statePath } = loadLoopState(sessionId);
-      saveLoopState(statePath, { blocks: 0 });
-      process.exit(0);
-    }
-
-    blockAndExit(sessionId, stopHookActive, buildBlockReason(matches));
+  } else {
+    // Unstructured response: run trigger audit on full text.
+    triggerMatches = findTriggerMatches(lastAssistantText, config);
   }
-
-  // Unstructured response: run existing trigger audit unchanged.
-  const matches = findTriggerMatches(lastAssistantText, config);
 
   if (config.introspect) {
     // Introspection mode: log everything, never block.
     const { statePath, data } = loadLoopState(sessionId);
     const blocks = Number(data.blocks || 0);
-    const nextBlocks = matches.length > 0 ? blocks + 1 : 0;
+    const hasIssues = structuralErrors.length > 0 || triggerMatches.length > 0;
+    const nextBlocks = hasIssues ? blocks + 1 : 0;
     saveLoopState(statePath, { blocks: nextBlocks });
 
     const logPath =
       config.introspectOutputPath ||
       path.join(os.tmpdir(), 'hallucination-detector-introspect.jsonl');
 
-    const wouldBlock = matches.length > 0 && nextBlocks <= 2;
+    const wouldBlock = hasIssues && nextBlocks <= maxBlocks;
     const sentenceScores = scoreText(lastAssistantText, config.weights);
 
     const categoryCounts = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
-    for (const m of matches) {
+    for (const m of triggerMatches) {
       if (Object.hasOwn(categoryCounts, m.kind)) {
         categoryCounts[m.kind] += 1;
       }
@@ -1038,8 +1171,9 @@ function main() {
       timestamp: new Date().toISOString(),
       sessionId,
       wouldBlock,
-      matchCount: matches.length,
-      matches: matches.map((m) => ({ kind: m.kind, evidence: m.evidence })),
+      structuralErrorCount: structuralErrors.length,
+      matchCount: triggerMatches.length,
+      matches: triggerMatches.map((m) => ({ kind: m.kind, evidence: m.evidence })),
       sentenceScores,
       textLength: lastAssistantText.length,
       textHash: hashText(lastAssistantText),
@@ -1049,14 +1183,33 @@ function main() {
     process.exit(0);
   }
 
-  if (matches.length === 0) {
+  // Decide block reason based on what was found.
+  if (structuralErrors.length === 0 && triggerMatches.length === 0) {
     const { statePath } = loadLoopState(sessionId);
     saveLoopState(statePath, { blocks: 0 });
     process.exit(0);
   }
 
-  // Avoid infinite loops: after 2 blocks in the same session, allow stop.
-  blockAndExit(sessionId, stopHookActive, buildBlockReason(matches));
+  if (structuralErrors.length > 0 && triggerMatches.length > 0) {
+    blockAndExit(
+      sessionId,
+      stopHookActive,
+      buildCombinedBlockReason(structuralErrors, triggerMatches),
+      maxBlocks,
+    );
+  }
+
+  if (structuralErrors.length > 0) {
+    blockAndExit(
+      sessionId,
+      stopHookActive,
+      buildStructuralBlockReason(structuralErrors),
+      maxBlocks,
+    );
+  }
+
+  // Trigger matches only.
+  blockAndExit(sessionId, stopHookActive, buildBlockReason(triggerMatches), maxBlocks);
 }
 
 // Export internals for testing; run main() only when executed directly.
@@ -1076,6 +1229,7 @@ module.exports = {
   isIndexWithinQuestion,
   isQualityScore,
   hasEnumerationNearby,
+  isNegatedParticiple,
   parseJsonl,
   splitIntoSentences,
   scoreSentence,
@@ -1091,5 +1245,8 @@ module.exports = {
   hashText,
   // Structure-aware detection exports
   buildStructuralBlockReason,
+  buildCombinedBlockReason,
   stripLabeledClaimLines,
+  // Uncertainty enumeration suppression
+  isWithinUncertaintyEnumeration,
 };
