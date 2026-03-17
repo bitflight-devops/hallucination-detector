@@ -56,6 +56,21 @@ const VAGUE_EVIDENCE_RE =
 const EVIDENCE_PREFIX_RE =
   /^\s*(?:User|File|Log|Test|Doc|Tool|Transcript|Code|Command|Output|Error|Config|Trace|Repro|Observation|Result|Search|Glob|Grep|Read|Bash):/i;
 
+// Concrete substance markers for evidence quality check — hoisted to module scope
+// so the array is allocated once rather than on every hasConcreteSubstance() call.
+const SUBSTANCE_MARKERS = [
+  /[\w./-]+\.\w{1,6}(?::\d+)?/, // file paths
+  /\bline\s+\d+/i, // "line 42"
+  /\b(?:grep|glob|read|curl|git|npm|pnpm|node|bash|vitest|biome)\b/i, // tool/command names
+  /\b(?:error|exit)\s*(?:code)?\s*\d+/i, // error/exit codes
+  /\bHTTP\s*\d{3}\b/i, // HTTP status codes
+  /\b[A-Z]\d{3,4}\b/, // linter codes
+  /["'][^"']{3,}["']/, // quoted output
+  /\b(?:returned|showed|output|printed|logged|threw|raised|reported)\b/i, // observation verbs
+  /\d+\s+(?:files?|matches?|results?|lines?|items?|entries?|errors?)\b/i, // numeric results
+  /\b(?:stdout|stderr|traceback|exception|stack\s*trace)\b/i, // diagnostic refs
+];
+
 /**
  * Check whether evidence content contains concrete verifiable markers even
  * when no recognized prefix is present. Used as a fallback before emitting
@@ -66,18 +81,6 @@ const EVIDENCE_PREFIX_RE =
  * @returns {boolean}
  */
 function hasConcreteSubstance(evidenceContent) {
-  const SUBSTANCE_MARKERS = [
-    /[\w./-]+\.\w{1,6}(?::\d+)?/, // file paths
-    /\bline\s+\d+/i, // "line 42"
-    /\b(?:grep|glob|read|curl|git|npm|pnpm|node|bash|vitest|biome)\b/i, // tool/command names
-    /\b(?:error|exit)\s*(?:code)?\s*\d+/i, // error/exit codes
-    /\bHTTP\s*\d{3}\b/i, // HTTP status codes
-    /\b[A-Z]\d{3,4}\b/, // linter codes
-    /["'][^"']{3,}["']/, // quoted output
-    /\b(?:returned|showed|output|printed|logged|threw|raised|reported)\b/i, // observation verbs
-    /\d+\s+(?:files?|matches?|results?|lines?|items?|entries?|errors?)\b/i, // numeric results
-    /\b(?:stdout|stderr|traceback|exception|stack\s*trace)\b/i, // diagnostic refs
-  ];
   return SUBSTANCE_MARKERS.some((re) => re.test(evidenceContent));
 }
 

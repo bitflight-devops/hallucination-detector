@@ -280,18 +280,37 @@ function isWithinUncertaintyEnumeration(text, idx, precedingWindow = 200, follow
   const idxInWindow = idx - start;
 
   for (const re of UNCERTAINTY_MARKERS) {
-    const match = window.match(re);
-    if (!match) continue;
-    const markerPos = match.index;
-    // Check no paragraph break between marker and speculation phrase
-    const segStart = Math.min(markerPos, idxInWindow);
-    const segEnd = Math.max(markerPos + match[0].length, idxInWindow);
-    const between = window.slice(segStart, segEnd);
-    if (/\n\n/.test(between)) continue;
-    return true;
+    const globalRe = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    for (const match of window.matchAll(globalRe)) {
+      const markerPos = match.index;
+      const segStart = Math.min(markerPos, idxInWindow);
+      const segEnd = Math.max(markerPos + match[0].length, idxInWindow);
+      const between = window.slice(segStart, segEnd);
+      if (/\n\n/.test(between)) continue;
+      return true;
+    }
   }
   return false;
 }
+
+// Common words that start with "un" but are NOT negations — they would be
+// misclassified by the /^un\w+(?:ed|d)$/ prefix check in isNegatedParticiple.
+const NON_NEGATION_UN_WORDS = new Set([
+  'understood',
+  'united',
+  'undertook',
+  'underpinned',
+  'underscored',
+  'underlined',
+  'undermined',
+  'undergirded',
+  'unveiled',
+  'unwound',
+  'uploaded',
+  'updated',
+  'uprooted',
+  'upended',
+]);
 
 /**
  * Returns true when a "fully/completely + participle" match is a negation/disclaimer.
@@ -305,6 +324,11 @@ function isWithinUncertaintyEnumeration(text, idx, precedingWindow = 200, follow
 function isNegatedParticiple(matchedText, fullText, matchIndex) {
   const words = matchedText.trim().split(/\s+/);
   const participle = words[words.length - 1].toLowerCase();
+
+  // Exception: common "un-" words that are not negations
+  if (NON_NEGATION_UN_WORDS.has(participle)) {
+    return false;
+  }
 
   // Safe prefixes where removal reliably indicates negation
   if (/^(?:un|non|dis)\w+(?:ed|d)$/i.test(participle)) {

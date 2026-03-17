@@ -387,6 +387,11 @@ describe('completeness claims', () => {
     const matches = findTriggerMatches('The task is completely done.');
     expect(matches.filter((m) => m.kind === 'completeness_claim').length).toBeGreaterThan(0);
   });
+
+  it('still flags "fully understood" — NON_NEGATION_UN_WORDS must not suppress completeness_claim', () => {
+    const matches = findTriggerMatches('The problem is fully understood.');
+    expect(matches.filter((m) => m.kind === 'completeness_claim').length).toBeGreaterThan(0);
+  });
 });
 
 // =============================================================================
@@ -427,6 +432,18 @@ describe('isNegatedParticiple', () => {
     const text = 'This path was never fully tested.';
     const idx = text.indexOf('fully');
     expect(isNegatedParticiple('fully tested', text, idx)).toBe(true);
+  });
+
+  it('returns false for "understood" (NON_NEGATION_UN_WORDS exception)', () => {
+    expect(isNegatedParticiple('fully understood', 'The problem is fully understood.', 15)).toBe(
+      false,
+    );
+  });
+
+  it('returns false for "united" (NON_NEGATION_UN_WORDS exception)', () => {
+    expect(isNegatedParticiple('completely united', 'The team is completely united.', 12)).toBe(
+      false,
+    );
   });
 });
 
