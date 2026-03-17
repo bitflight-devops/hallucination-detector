@@ -661,20 +661,25 @@ describe('schema validation', () => {
 describe('loadConfig thresholds', () => {
   let tmpDir;
   let originalCwd;
+  let savedEnv;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-thresh-test-${Date.now()}-`));
     originalCwd = process.cwd();
     process.chdir(tmpDir);
+    savedEnv = process.env.HALLUCINATION_DETECTOR_CONFIG;
+    delete process.env.HALLUCINATION_DETECTOR_CONFIG;
   });
 
   afterEach(() => {
     process.chdir(originalCwd);
+    if (savedEnv !== undefined) process.env.HALLUCINATION_DETECTOR_CONFIG = savedEnv;
+    else delete process.env.HALLUCINATION_DETECTOR_CONFIG;
     fs.rmSync(tmpDir, { recursive: true });
   });
 
   it('returns DEFAULT_THRESHOLDS when no rc file exists', () => {
-    const config = loadConfig();
+    const config = loadConfig({ _homeDir: tmpDir });
     expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
   });
 
@@ -683,7 +688,7 @@ describe('loadConfig thresholds', () => {
       path.join(tmpDir, '.hallucination-detectorrc.cjs'),
       'module.exports = { thresholds: { uncertain: 0.2, hallucinated: 0.7 } };',
     );
-    const config = loadConfig();
+    const config = loadConfig({ _homeDir: tmpDir });
     expect(config.thresholds.uncertain).toBe(0.2);
     expect(config.thresholds.hallucinated).toBe(0.7);
   });
@@ -693,7 +698,7 @@ describe('loadConfig thresholds', () => {
       path.join(tmpDir, '.hallucination-detectorrc.cjs'),
       'module.exports = { thresholds: { uncertain: 0.8, hallucinated: 0.4 } };',
     );
-    const config = loadConfig();
+    const config = loadConfig({ _homeDir: tmpDir });
     expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
   });
 
@@ -702,7 +707,7 @@ describe('loadConfig thresholds', () => {
       path.join(tmpDir, '.hallucination-detectorrc.cjs'),
       'module.exports = { thresholds: { uncertain: -0.1, hallucinated: 0.6 } };',
     );
-    const config = loadConfig();
+    const config = loadConfig({ _homeDir: tmpDir });
     expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
   });
 
@@ -711,12 +716,12 @@ describe('loadConfig thresholds', () => {
       path.join(tmpDir, '.hallucination-detectorrc.cjs'),
       'module.exports = { thresholds: { uncertain: 0.3, hallucinated: 1.5 } };',
     );
-    const config = loadConfig();
+    const config = loadConfig({ _homeDir: tmpDir });
     expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
   });
 
   it('thresholds are preserved in frozen config', () => {
-    const config = loadConfig();
+    const config = loadConfig({ _homeDir: tmpDir });
     expect(Object.isFrozen(config.thresholds)).toBe(true);
   });
 });

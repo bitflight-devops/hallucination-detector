@@ -382,7 +382,7 @@ const INTERNAL_CONTRADICTION_STOP_WORDS = new Set([
 ]);
 
 /** Regex matching negation markers used to classify sentences as negated/affirmative. */
-const NEGATION_POLARITY_RE = /\b(?:not|never|no(?:ne|body|thing|where)?|n't)\b/i;
+const NEGATION_POLARITY_RE = /\b(?:not|never|no(?:ne|body|thing|where)?|\w+n't)\b/i;
 
 /**
  * Lightweight suffix stripper that normalizes word forms.
@@ -399,8 +399,13 @@ function stemWord(word) {
   if (result.endsWith('ing') && result.length > 5) {
     result = result.slice(0, -3);
     // Collapse doubled final consonant introduced by suffix removal (e.g., "runn" → "run").
+    // Exception: consonant pairs that legitimately appear doubled in base forms are preserved.
+    const LEGIT_DOUBLES = new Set(['ss', 'll', 'ff', 'zz']);
     if (result.length >= 3 && result[result.length - 1] === result[result.length - 2]) {
-      result = result.slice(0, -1);
+      const doubled = result.slice(-2);
+      if (!LEGIT_DOUBLES.has(doubled)) {
+        result = result.slice(0, -1);
+      }
     }
     return result;
   }
@@ -1315,7 +1320,8 @@ function buildBlockReason(matches, sentenceScores) {
         const n = s.index + 1;
         const raw = s.sentence.replace(/\s+/g, ' ').trim();
         const snippet = raw.length > 60 ? `${raw.slice(0, 60)}...` : raw;
-        parts.push(`- sentence ${n} of ${total} [${s.label}]: \`${snippet}\``);
+        const sanitized = snippet.replace(/`/g, "'");
+        parts.push(`- sentence ${n} of ${total} [${s.label}]: \`${sanitized}\``);
       }
     }
   }

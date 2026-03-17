@@ -2174,6 +2174,28 @@ describe('buildBlockReason sentence-level analysis', () => {
     expect(reason).not.toContain('Sentence-level analysis:');
   });
 
+  it('replaces backticks in snippet with single quotes to prevent broken inline-code wrapping', () => {
+    const matches = [{ kind: 'speculation_language', evidence: 'probably' }];
+    const sentenceScores = [
+      {
+        sentence: 'Run `npm test` to verify.',
+        index: 0,
+        total: 1,
+        aggregateScore: 0.4,
+        label: 'UNCERTAIN',
+      },
+    ];
+    const reason = buildBlockReason(matches, sentenceScores);
+    const sentenceLine = reason.split('\n').find((l) => l.includes('[UNCERTAIN]'));
+    expect(sentenceLine).toBeDefined();
+    // The outer backtick wrapping must be intact: exactly one pair of backticks
+    const backtickContent = sentenceLine.match(/`([^`]+)`/)?.[1];
+    expect(backtickContent).toBeDefined();
+    // Inner backticks from the sentence must be replaced with single quotes
+    expect(backtickContent).not.toContain('`');
+    expect(backtickContent).toContain("'npm test'");
+  });
+
   it('sentence-level section does not re-trigger findTriggerMatches', () => {
     const matches = [{ kind: 'causality_language', evidence: 'because' }];
     const sentenceScores = [
@@ -2311,6 +2333,22 @@ describe('stemWord', () => {
   it('strips -ly suffix', () => {
     expect(stemWord('quickly')).toBe('quick');
 >>>>>>> 2657020 (feat: configurable thresholds, sentence-level reasons, contradiction detection)
+  });
+
+  it('preserves legitimate double-s in base form (kissing → kiss)', () => {
+    expect(stemWord('kissing')).toBe('kiss');
+  });
+
+  it('preserves legitimate double-l in base form (filling → fill)', () => {
+    expect(stemWord('filling')).toBe('fill');
+  });
+
+  it('preserves legitimate double-f in base form (bluffing → bluff)', () => {
+    expect(stemWord('bluffing')).toBe('bluff');
+  });
+
+  it('preserves legitimate double-z in base form (buzzing → buzz)', () => {
+    expect(stemWord('buzzing')).toBe('buzz');
   });
 });
 
@@ -2620,6 +2658,14 @@ describe('detectInternalContradictions', () => {
     ].join(' ');
     const matches = detectInternalContradictions(text);
     expect(matches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("detects contradiction when negation is expressed via contraction (e.g. doesn't)", () => {
+    const text =
+      "The system handles errors gracefully. The system doesn't handle errors gracefully.";
+    const matches = detectInternalContradictions(text);
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches[0].kind).toBe('internal_contradiction');
   });
 
   it('requires Jaccard >= 0.4 — low overlap does not trigger', () => {
