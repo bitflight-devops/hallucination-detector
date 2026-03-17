@@ -1,3 +1,9 @@
+## [1.12.3](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.2...v1.12.3) (2026-03-17)
+
+### Bug Fixes
+
+- **hooks:** remove explicit hooks declaration — auto-discovery handles it ([f976e5d](https://github.com/bitflight-devops/hallucination-detector/commit/f976e5dc8fabbab0e33565643e044f3a781b7c1b))
+
 ## [1.12.2](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.1...v1.12.2) (2026-03-17)
 
 ### Bug Fixes
