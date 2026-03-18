@@ -1,3 +1,9 @@
+## [1.12.4](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.3...v1.12.4) (2026-03-18)
+
+### Bug Fixes
+
+- filter questions in contradiction detection, hoist LEGIT_DOUBLES, strengthen threshold tests ([#45](https://github.com/bitflight-devops/hallucination-detector/issues/45)) ([f92d42c](https://github.com/bitflight-devops/hallucination-detector/commit/f92d42c16890cfe6381c83e158c0c4206e767bbf))
+
 ## [1.12.3](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.2...v1.12.3) (2026-03-17)
 
 ### Bug Fixes
