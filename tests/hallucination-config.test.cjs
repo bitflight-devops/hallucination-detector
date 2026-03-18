@@ -202,7 +202,7 @@ describe('DEFAULT_THRESHOLDS', () => {
     expect(Object.keys(DEFAULT_THRESHOLDS).length).toBe(2);
   });
 
-  it('is exported from hallucination-config.cjs', () => {
+  it('DEFAULT_THRESHOLDS is an object', () => {
     expect(typeof DEFAULT_THRESHOLDS).toBe('object');
   });
 });
@@ -723,6 +723,52 @@ describe('loadConfig thresholds', () => {
   it('thresholds are preserved in frozen config', () => {
     const config = loadConfig({ _homeDir: tmpDir });
     expect(Object.isFrozen(config.thresholds)).toBe(true);
+  });
+
+  it('falls back to DEFAULT_THRESHOLDS when threshold values are non-numeric strings', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { thresholds: { uncertain: "low", hallucinated: "high" } };',
+    );
+    const config = loadConfig({ _homeDir: tmpDir });
+    expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
+  });
+
+  it('falls back to DEFAULT_THRESHOLDS when uncertain is NaN', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { thresholds: { uncertain: NaN, hallucinated: 0.6 } };',
+    );
+    const config = loadConfig({ _homeDir: tmpDir });
+    expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
+  });
+
+  it('falls back to DEFAULT_THRESHOLDS when hallucinated is Infinity', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { thresholds: { uncertain: 0.3, hallucinated: Infinity } };',
+    );
+    const config = loadConfig({ _homeDir: tmpDir });
+    expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
+  });
+
+  it('falls back to DEFAULT_THRESHOLDS when only the uncertain key is provided', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { thresholds: { uncertain: 0.2 } };',
+    );
+    const config = loadConfig({ _homeDir: tmpDir });
+    expect(config.thresholds).toEqual(DEFAULT_THRESHOLDS);
+  });
+
+  it('accepts thresholds when uncertain === hallucinated', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { thresholds: { uncertain: 0.5, hallucinated: 0.5 } };',
+    );
+    const config = loadConfig({ _homeDir: tmpDir });
+    expect(config.thresholds.uncertain).toBe(0.5);
+    expect(config.thresholds.hallucinated).toBe(0.5);
   });
 });
 
