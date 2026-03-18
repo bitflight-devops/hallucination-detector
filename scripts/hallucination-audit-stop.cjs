@@ -384,6 +384,9 @@ const INTERNAL_CONTRADICTION_STOP_WORDS = new Set([
 /** Regex matching negation markers used to classify sentences as negated/affirmative. */
 const NEGATION_POLARITY_RE = /\b(?:not|never|no(?:ne|body|thing|where)?|\w+n't)\b/i;
 
+/** Consonant pairs that legitimately appear doubled in base forms; preserved during stemming. */
+const LEGIT_DOUBLES = new Set(['ss', 'll', 'ff', 'zz']);
+
 /**
  * Lightweight suffix stripper that normalizes word forms.
  * After stripping `-ing`, collapses doubled final consonants (e.g., "runn" → "run").
@@ -400,7 +403,6 @@ function stemWord(word) {
     result = result.slice(0, -3);
     // Collapse doubled final consonant introduced by suffix removal (e.g., "runn" → "run").
     // Exception: consonant pairs that legitimately appear doubled in base forms are preserved.
-    const LEGIT_DOUBLES = new Set(['ss', 'll', 'ff', 'zz']);
     if (result.length >= 3 && result[result.length - 1] === result[result.length - 2]) {
       const doubled = result.slice(-2);
       if (!LEGIT_DOUBLES.has(doubled)) {
@@ -462,6 +464,21 @@ function stripNegationMarkers(sentence) {
     .trim();
 }
 
+/** Regex matching sentences that are questions and should be excluded from contradiction pairing. */
+const QUESTION_SENTENCE_RE =
+  /^\s*(?:who|what|when|where|why|how|does|do|did|is|are|was|were|has|have|had|can|could|should|would|will|may|might|shall)\b|[?]\s*$/i;
+
+/**
+ * Returns true when a sentence is a question and should be excluded from
+ * contradiction pairing (questions cannot contradict declarative sentences).
+ *
+ * @param {string} sentence
+ * @returns {boolean}
+ */
+function isQuestionSentence(sentence) {
+  return QUESTION_SENTENCE_RE.test(sentence.trim());
+}
+
 /**
  * Detect internal contradictions: pairs of affirmative/negated sentences that share
  * >= 2 significant terms and have Jaccard similarity >= 0.4.
@@ -473,7 +490,11 @@ function detectInternalContradictions(text) {
   const sentences = splitIntoSentences(stripLowSignalRegions(text));
   if (sentences.length < 2) return [];
 
-  const classified = sentences.map((s) => ({
+  // Exclude question sentences — they cannot contradict declarative sentences.
+  const declaratives = sentences.filter((s) => !isQuestionSentence(s));
+  if (declaratives.length < 2) return [];
+
+  const classified = declaratives.map((s) => ({
     text: s,
     negated: NEGATION_POLARITY_RE.test(s),
     terms: new Set(extractSignificantTerms(stripNegationMarkers(s))),
@@ -1508,7 +1529,12 @@ function main() {
     process.exit(0);
   }
 
-  const sentenceScoresForBlock = scoreText(lastAssistantText, config.weights, config.thresholds, config);
+  const sentenceScoresForBlock = scoreText(
+    lastAssistantText,
+    config.weights,
+    config.thresholds,
+    config,
+  );
 
   if (structuralErrors.length > 0 && triggerMatches.length > 0) {
     blockAndExit(
@@ -1529,7 +1555,12 @@ function main() {
   }
 
   // Trigger matches only.
-  blockAndExit(sessionId, stopHookActive, buildBlockReason(triggerMatches, sentenceScoresForBlock), maxBlocks);
+  blockAndExit(
+    sessionId,
+    stopHookActive,
+    buildBlockReason(triggerMatches, sentenceScoresForBlock),
+    maxBlocks,
+  );
 }
 
 // Export internals for testing; run main() only when executed directly.

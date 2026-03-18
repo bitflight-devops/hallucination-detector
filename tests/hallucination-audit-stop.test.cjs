@@ -2718,17 +2718,14 @@ describe('detectInternalContradictions', () => {
     const text =
       'The authentication proxy cache module gateway is valid secure reliable. The proxy is not broken.';
     const matches = detectInternalContradictions(text);
-    // With few shared terms among many total terms, Jaccard likely < 0.4
-    // This test verifies the threshold gate works — result may be 0
-    expect(Array.isArray(matches)).toBe(true);
+    expect(matches).toHaveLength(0);
   });
 
   it('requires >= 2 shared terms', () => {
     // Only one shared significant term → should not trigger
-    const text = 'The authentication is valid. The authentication is not valid and broken now.';
-    // 'authentication' (stemmed) is shared but other terms differ enough
-    // This is a boundary test — key is that it doesn't throw
-    expect(() => detectInternalContradictions(text)).not.toThrow();
+    const text = 'The module is valid. The module is not damaged.';
+    const matches = detectInternalContradictions(text);
+    expect(matches).toHaveLength(0);
   });
 });
 
