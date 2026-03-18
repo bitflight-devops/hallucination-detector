@@ -34,6 +34,17 @@ const DEFAULT_WEIGHTS = {
   completeness_claim: 0.2,
   // fabricated_source: reserved for future implementation (issue #18)
   evaluative_design_claim: 0.4,
+  internal_contradiction: 0.35,
+};
+
+/**
+ * Default score thresholds for three-tier label classification.
+ * - uncertain: scores >= this value are labelled UNCERTAIN (not GROUNDED)
+ * - hallucinated: scores > this value are labelled HALLUCINATED
+ */
+const DEFAULT_THRESHOLDS = {
+  uncertain: 0.3,
+  hallucinated: 0.6,
 };
 
 /**
@@ -41,6 +52,7 @@ const DEFAULT_WEIGHTS = {
  */
 const DEFAULT_CONFIG = {
   weights: DEFAULT_WEIGHTS,
+  thresholds: DEFAULT_THRESHOLDS,
   introspect: false,
   introspectOutputPath: null,
   // Global settings
@@ -254,6 +266,31 @@ const VALID_SEVERITIES = new Set(['error', 'warning', 'info']);
 const VALID_OUTPUT_FORMATS = new Set(['text', 'json', 'jsonl']);
 
 /**
+ * Returns true when `t` is a valid thresholds object: a non-null plain object
+ * with both `uncertain` and `hallucinated` as finite numbers in [0,1] and
+ * `uncertain <= hallucinated`.
+ *
+ * @param {*} t - Value to check.
+ * @returns {boolean}
+ */
+function isValidThresholds(t) {
+  return (
+    t !== null &&
+    typeof t === 'object' &&
+    !Array.isArray(t) &&
+    typeof t.uncertain === 'number' &&
+    Number.isFinite(t.uncertain) &&
+    t.uncertain >= 0 &&
+    t.uncertain <= 1 &&
+    typeof t.hallucinated === 'number' &&
+    Number.isFinite(t.hallucinated) &&
+    t.hallucinated >= 0 &&
+    t.hallucinated <= 1 &&
+    t.uncertain <= t.hallucinated
+  );
+}
+
+/**
  * Validate a raw config object loaded from a source, logging warnings to stderr
  * for invalid field values and deleting them so they fall back to defaults during
  * the merge step.  Mutates the provided object in place.
@@ -321,6 +358,13 @@ function validateConfig(obj, source) {
     if (typeof obj.weights !== 'object' || obj.weights === null || Array.isArray(obj.weights)) {
       warn('weights', obj.weights, DEFAULT_WEIGHTS);
       delete obj.weights;
+    }
+  }
+  // thresholds: { uncertain, hallucinated } both numbers in [0,1], uncertain <= hallucinated
+  if ('thresholds' in obj) {
+    if (!isValidThresholds(obj.thresholds)) {
+      warn('thresholds', JSON.stringify(obj.thresholds), DEFAULT_THRESHOLDS);
+      delete obj.thresholds;
     }
   }
   return obj;
@@ -563,6 +607,7 @@ function loadConfig(_opts) {
   let config = {
     ...DEFAULT_CONFIG,
     weights: { ...DEFAULT_WEIGHTS },
+    thresholds: { ...DEFAULT_THRESHOLDS },
     categories: {},
     ignorePatterns: [],
     ignoreBlocks: [],
@@ -587,6 +632,11 @@ function loadConfig(_opts) {
   }
   config.weights = weights;
 
+  // Validate and normalise the thresholds field after all merges.
+  config.thresholds = isValidThresholds(config.thresholds)
+    ? { uncertain: config.thresholds.uncertain, hallucinated: config.thresholds.hallucinated }
+    : { ...DEFAULT_THRESHOLDS };
+
   return deepFreeze(config);
 }
 
@@ -599,4 +649,12 @@ function loadWeights() {
   return loadConfig().weights;
 }
 
-module.exports = { loadConfig, loadWeights, mergeConfig, DEFAULT_WEIGHTS, DEFAULT_CONFIG };
+module.exports = {
+  loadConfig,
+  loadWeights,
+  mergeConfig,
+  isValidThresholds,
+  DEFAULT_WEIGHTS,
+  DEFAULT_THRESHOLDS,
+  DEFAULT_CONFIG,
+};
