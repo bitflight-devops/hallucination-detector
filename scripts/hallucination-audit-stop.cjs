@@ -464,9 +464,20 @@ function stripNegationMarkers(sentence) {
     .trim();
 }
 
-/** Regex matching sentences that are questions and should be excluded from contradiction pairing. */
-const QUESTION_SENTENCE_RE =
-  /^\s*(?:who|what|when|where|why|how|does|do|did|is|are|was|were|has|have|had|can|could|should|would|will|may|might|shall)\b|[?]\s*$/i;
+/**
+ * Regex matching sentences that are questions and should be excluded from
+ * contradiction pairing.
+ *
+ * Two heuristics:
+ * 1. Sentence ends with `?` — unambiguous question regardless of how it starts.
+ * 2. Sentence starts with a WH-word (who/what/when/where/why/how) — these words
+ *    almost always head interrogative clauses when they open a sentence.
+ *
+ * Modal/auxiliary starters (can/will/may/is/does/etc.) are intentionally excluded
+ * from the no-`?` branch because they commonly head declaratives
+ * (e.g. "Can be configured…", "May result in…", "Will cause errors…").
+ */
+const QUESTION_SENTENCE_RE = /^\s*(?:who|what|when|where|why|how)\b|[?]\s*$/i;
 
 /**
  * Returns true when a sentence is a question and should be excluded from
