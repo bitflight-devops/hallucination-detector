@@ -20,11 +20,159 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+// Telemetry: node:sqlite is experimental (Node 22.5+). Wrap in try/catch so the
+// hook continues normally on any Node version that does not support it.
+let DatabaseSync = null;
+let telemetryAvailable = false;
+try {
+  ({ DatabaseSync } = require('node:sqlite'));
+  telemetryAvailable = true;
+} catch {
+  // node:sqlite unavailable — telemetry disabled, hook continues normally
+}
+
 const { loadConfig, loadWeights, DEFAULT_WEIGHTS } = require('./hallucination-config.cjs');
 const {
   validateClaimStructure,
   CLAIM_LABEL_ALTERNATION,
 } = require('./hallucination-claim-structure.cjs');
+
+// =============================================================================
+// Telemetry
+// =============================================================================
+
+const TELEMETRY_DB_PATH = path.join(os.homedir(), '.hd', 'telemetry', 'hallucination-detector.db');
+
+const PRICING = {
+  'claude-opus-4-6': { output: 75 / 1e6, cache_read: 1.5 / 1e6 },
+  'claude-sonnet-4-6': { output: 15 / 1e6, cache_read: 0.3 / 1e6 },
+  'claude-haiku-4-5-20251001': { output: 4 / 1e6, cache_read: 0.08 / 1e6 },
+};
+// Default to sonnet pricing when model is unknown or not in PRICING map.
+const DEFAULT_PRICING = PRICING['claude-sonnet-4-6'];
+
+/** Module-level DB connection — opened once, reused across writeTelemetry calls. */
+let _telemetryDb = null;
+
+/**
+ * Open (or return the cached) telemetry DB connection.
+ * Returns null on any failure so callers can detect unavailability.
+ *
+ * @returns {object|null}
+ */
+function getTelemetryDb() {
+  if (_telemetryDb) return _telemetryDb;
+  try {
+    fs.mkdirSync(path.dirname(TELEMETRY_DB_PATH), { recursive: true });
+    const db = new DatabaseSync(TELEMETRY_DB_PATH);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS hook_events (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts                 INTEGER NOT NULL,
+        session_id         TEXT    NOT NULL,
+        project_dir        TEXT,
+        model              TEXT,
+        event_type         TEXT    NOT NULL,
+        categories         TEXT,
+        evidence           TEXT,
+        error_codes        TEXT,
+        output_tokens      INTEGER,
+        cache_read_tokens  INTEGER,
+        estimated_cost_usd REAL,
+        response_snippet   TEXT,
+        retry_count        INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_ts         ON hook_events(ts);
+      CREATE INDEX IF NOT EXISTS idx_session_id ON hook_events(session_id);
+      CREATE INDEX IF NOT EXISTS idx_event_type ON hook_events(event_type);
+    `);
+    _telemetryDb = db;
+    return db;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write a single telemetry event record. Silent on any failure.
+ *
+ * @param {object} event
+ * @param {string}   event.event_type
+ * @param {string}   event.session_id
+ * @param {string}   [event.project_dir]
+ * @param {string}   [event.model]
+ * @param {string[]} [event.categories]
+ * @param {string[]} [event.evidence]
+ * @param {string[]} [event.error_codes]
+ * @param {number}   [event.output_tokens]
+ * @param {number}   [event.cache_read_tokens]
+ * @param {string}   [event.response_snippet]
+ * @param {number}   [event.retry_count]
+ */
+function writeTelemetry(event) {
+  if (!telemetryAvailable) return;
+  try {
+    const db = getTelemetryDb();
+    if (!db) return;
+
+    const model = event.model || 'unknown';
+    const pricing = PRICING[model] || DEFAULT_PRICING;
+    const outputTokens = event.output_tokens || 0;
+    const cacheReadTokens = event.cache_read_tokens || 0;
+    const estimatedCost = outputTokens * pricing.output + cacheReadTokens * pricing.cache_read;
+
+    const stmt = db.prepare(`
+      INSERT INTO hook_events (
+        ts, session_id, project_dir, model, event_type,
+        categories, evidence, error_codes,
+        output_tokens, cache_read_tokens, estimated_cost_usd,
+        response_snippet, retry_count
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      Date.now(),
+      event.session_id || '',
+      event.project_dir || null,
+      model,
+      event.event_type,
+      event.categories ? JSON.stringify(event.categories) : null,
+      event.evidence ? JSON.stringify(event.evidence) : null,
+      event.error_codes ? JSON.stringify(event.error_codes) : null,
+      outputTokens || null,
+      cacheReadTokens || null,
+      estimatedCost > 0 ? estimatedCost : null,
+      event.response_snippet || null,
+      event.retry_count ?? null,
+    );
+  } catch {
+    // intentionally silent — telemetry failure must not affect hook behavior
+  }
+}
+
+/**
+ * Extract model name and token usage from the last assistant entry in transcript entries.
+ * Scans the last 20 entries (from the end) for an assistant record with a model field.
+ *
+ * @param {object[]} entries - Parsed JSONL entries
+ * @returns {{ model: string, output_tokens: number, cache_read_tokens: number }}
+ */
+function getLastAssistantMeta(entries) {
+  const result = { model: 'unknown', output_tokens: 0, cache_read_tokens: 0 };
+  const slice = entries.slice(-20);
+  for (let i = slice.length - 1; i >= 0; i--) {
+    const entry = slice[i];
+    if (!entry || entry.type !== 'assistant') continue;
+    const msg = entry.message;
+    if (!msg) continue;
+    if (typeof msg.model === 'string' && msg.model) result.model = msg.model;
+    if (msg.usage) {
+      result.output_tokens = msg.usage.output_tokens || 0;
+      result.cache_read_tokens = msg.usage.cache_read_input_tokens || 0;
+    }
+    break;
+  }
+  return result;
+}
 
 function readStdinJson() {
   try {
@@ -499,7 +647,36 @@ function findTriggerMatches(text, config = {}) {
         'may',
       ];
       // Pronouns that precede "may" in permissive/instructional usage ("you may use").
-      const PERMISSIVE_MAY_PRONOUNS = new Set(['you', 'one', 'anyone', 'users', 'they', 'we']);
+      const PERMISSIVE_MAY_PRONOUNS = new Set([
+        'you',
+        'one',
+        'anyone',
+        'users',
+        'they',
+        'we',
+        'caller',
+        'clients',
+        'consumers',
+      ]);
+      // Documentation context keywords: when any appear within ±200 chars, "may" is
+      // describing an allowable state, not asserting epistemic uncertainty.
+      const MAY_DOC_CONTEXT_RE =
+        /\b(?:parameter|option|argument|field|value|config|setting|property|attribute|variable)\b/i;
+      // Existential/container "may": describes possible presence of data, not a claim.
+      const MAY_EXISTENTIAL_RE = /\bmay\s+(?:contain|include|be\s+present|exist|appear)\b/i;
+      // Non-epistemic passive constructions: allowable states, not speculation.
+      const MAY_PASSIVE_ALLOWABLE_RE =
+        /\bmay\s+be\s+(?:modified|omitted|skipped|empty|null|undefined|absent|overridden|ignored)\b/i;
+
+      // Suppression phrases for "assume": first-person + will/let operating assumption.
+      const ASSUME_OPERATING_RE =
+        /\b(?:i\s+will\s+assume|i'll\s+assume|let'?s\s+assume|let\s+me\s+assume|i'?m\s+going\s+to\s+assume)\b/i;
+      // Conditional framing: "assuming X, then" / "assuming X—" / "assuming X the"
+      const ASSUME_CONDITIONAL_RE = /\bassuming\s+\S.{0,60}(?:,\s*then\b|—|\s+the\b|\s+this\b)/i;
+      // Clarifying assumption: "assume you want" / "assume the default" / "assume standard"
+      const ASSUME_CLARIFYING_RE =
+        /\bassume\s+(?:you\s+want|the\s+default|standard|conventional)\b/i;
+
       for (const phrase of speculationPhrases) {
         let searchFrom = 0;
         while (true) {
@@ -520,12 +697,42 @@ function findTriggerMatches(text, config = {}) {
             )
               continue;
           }
-          // Suppress permissive "may" when preceded by a permission-granting pronoun.
+
           if (phrase === 'may') {
+            // Suppress permissive "may" when preceded by a permission-granting pronoun.
             const before = lower.slice(0, idx).trimEnd();
             const lastWord = before.slice(before.lastIndexOf(' ') + 1);
             if (PERMISSIVE_MAY_PRONOUNS.has(lastWord)) continue;
+
+            // Suppress when "may" is in a documentation context (±200 chars contains
+            // parameter/option/argument/field/value/config/setting/property/attribute/variable).
+            const docWindow = haystack.slice(
+              Math.max(0, idx - 200),
+              Math.min(haystack.length, idx + 200),
+            );
+            if (MAY_DOC_CONTEXT_RE.test(docWindow)) continue;
+
+            // Suppress existential/container "may": "may contain", "may include", etc.
+            const mayExistWindow = haystack.slice(idx, Math.min(haystack.length, idx + 60));
+            if (MAY_EXISTENTIAL_RE.test(mayExistWindow)) continue;
+
+            // Suppress non-epistemic passive allowable-state "may": "may be modified", etc.
+            if (MAY_PASSIVE_ALLOWABLE_RE.test(mayExistWindow)) continue;
           }
+
+          if (phrase === 'assume' || phrase === 'i assume') {
+            // Suppress operating-assumption framing ("I will assume", "let's assume", etc.)
+            const assumeWindow = haystack.slice(
+              Math.max(0, idx - 30),
+              Math.min(haystack.length, idx + 60),
+            );
+            if (ASSUME_OPERATING_RE.test(assumeWindow)) continue;
+            // Suppress conditional framing ("assuming X, then" / "assuming X—")
+            if (ASSUME_CONDITIONAL_RE.test(assumeWindow)) continue;
+            // Suppress clarifying assumption ("assume you want", "assume the default")
+            if (ASSUME_CLARIFYING_RE.test(assumeWindow)) continue;
+          }
+
           // Suppress when the phrase appears within an explicit uncertainty enumeration —
           // the assistant is transparently disclosing what it does not know.
           if (isWithinUncertaintyEnumeration(haystack, idx)) continue;
@@ -582,13 +789,27 @@ function findTriggerMatches(text, config = {}) {
   // Change 2 & 6: Expanded phrase list + evidence suppression.
   if (isCategoryEnabled('causality_language')) {
     if (useBuiltIn('causality_language')) {
-      // Temporal 'since' exclusion (Change 6)
+      // Temporal 'since' exclusion (Change 6) — extended with "since then/that" and
+      // "since we/you/I + past-tense" patterns.
       const TEMPORAL_SINCE =
         /\bsince\s+(?:last\s+)?(?:yesterday|today|then|\d{4}|\d{1,2}[/-]\d{1,2}|\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\s+ago|the\s+(?:beginning|start|end)|version\s+\d)/i;
+      // "since then" / "since that change/commit/update"
+      const TEMPORAL_SINCE_THEN = /\bsince\s+then\b/i;
+      const TEMPORAL_SINCE_THAT = /\bsince\s+that\b/i;
+      // "since we changed", "since I updated", "since you added" — prior action reference
+      const TEMPORAL_SINCE_PRIOR_ACTION = /\bsince\s+(?:we|you|i)\s+[a-z]+ed\b/i;
 
       // Hedged-because pattern (Change 2)
       const HEDGED_BECAUSE =
         /\b(?:probably|likely|possibly|perhaps|maybe|might\s+be|could\s+be)\s+because\b/i;
+      // "because" followed within 50 chars by a file path pattern — grounded citation
+      const BECAUSE_FILE_PATH_RE = /because.{0,50}(?:\/[\w./~-]+|\.\/|~\/|`[^`]+`)/i;
+      // "because of the" + artifact noun — referencing an existing artifact, not guessing
+      const BECAUSE_ARTIFACT_RE =
+        /\bbecause\s+of\s+the\s+(?:output|error|config|file|log|result|test|report)\b/i;
+      // Self-description: "I stopped/exited/skipped/failed because" — describing own action
+      const BECAUSE_SELF_DESCRIPTION_RE =
+        /\bi\s+(?:stopped|exited|skipped|failed|aborted|returned|quit|halted)\s+because\b/i;
 
       const causalityPhrases = [
         'caused by',
@@ -636,6 +857,9 @@ function findTriggerMatches(text, config = {}) {
               Math.min(haystack.length, idx + 100),
             );
             if (TEMPORAL_SINCE.test(nearby)) continue;
+            if (TEMPORAL_SINCE_THEN.test(nearby)) continue;
+            if (TEMPORAL_SINCE_THAT.test(nearby)) continue;
+            if (TEMPORAL_SINCE_PRIOR_ACTION.test(nearby)) continue;
           }
 
           if (phrase === 'because') {
@@ -644,8 +868,29 @@ function findTriggerMatches(text, config = {}) {
               matches.push({ kind: 'causality_language', evidence: 'because (hedged)' });
               break; // one flag per hedged-because pattern is sufficient
             }
-            // Evidence nearby suppresses plain 'because'
-            if (hasEvidenceNearby(haystack, idx, rawText)) continue;
+            // "because of the <artifact>" — citing an existing artifact, not guessing
+            if (
+              BECAUSE_ARTIFACT_RE.test(
+                haystack.slice(Math.max(0, idx - 5), Math.min(haystack.length, idx + 80)),
+              )
+            )
+              continue;
+            // Self-description ("I stopped because") — not a causal claim about the world
+            if (
+              BECAUSE_SELF_DESCRIPTION_RE.test(
+                haystack.slice(Math.max(0, idx - 60), Math.min(haystack.length, idx + 20)),
+              )
+            )
+              continue;
+            // "because" followed by a file path within 50 chars — grounded citation
+            if (
+              BECAUSE_FILE_PATH_RE.test(
+                haystack.slice(Math.max(0, idx - 5), Math.min(haystack.length, idx + 60)),
+              )
+            )
+              continue;
+            // Evidence nearby suppresses plain 'because' (expanded window: 300 chars)
+            if (hasEvidenceNearby(haystack, idx, rawText, 300)) continue;
             matches.push({ kind: 'causality_language', evidence: phrase });
             continue;
           }
@@ -1038,15 +1283,28 @@ const BLOCK_HEADER = 'Hallucination-detector STOP HOOK blocked this response.';
  * @param {string} reason
  * @param {number} [maxBlocks] - Maximum number of blocks before allowing through. Defaults to 2.
  */
-function blockAndExit(sessionId, reason, maxBlocks) {
+/**
+ * @param {string} sessionId
+ * @param {string} reason
+ * @param {number} [maxBlocks]
+ * @param {object} [telemetryCtx] - Optional telemetry context passed to writeTelemetry.
+ * @param {string} [telemetryCtx.event_type] - 'block' or 'structural_block'
+ */
+function blockAndExit(sessionId, reason, maxBlocks, telemetryCtx) {
   const { statePath, data } = loadLoopState(sessionId);
   const currentBlocks = Number(data.blocks || 0);
   const limit = typeof maxBlocks === 'number' && maxBlocks >= 0 ? maxBlocks : 2;
   if (currentBlocks >= limit) {
     // Already hit the limit in a prior call — allow through unconditionally.
+    if (telemetryCtx) {
+      writeTelemetry({ ...telemetryCtx, event_type: 'fail_open', retry_count: currentBlocks });
+    }
     process.exit(0);
   }
   saveLoopState(statePath, { blocks: currentBlocks + 1 });
+  if (telemetryCtx) {
+    writeTelemetry({ ...telemetryCtx, retry_count: currentBlocks });
+  }
   emitJson({ decision: 'block', reason });
   process.exit(0);
 }
@@ -1164,12 +1422,18 @@ function main() {
   const input = readStdinJson();
   const transcriptPath = input.transcript_path || '';
   const sessionId = input.session_id || '';
+  const projectDir = input.cwd || null;
 
   // Compact agent exemption: sessions whose first human message is a compaction
   // directive are exempted from all detection. Compact agents summarize prior
   // conversation content verbatim — they cannot avoid flagged phrases that
   // appear in the conversation being summarized.
   if (transcriptPath && isCompactAgentSession(transcriptPath)) {
+    writeTelemetry({
+      event_type: 'compact_exempt',
+      session_id: sessionId,
+      project_dir: projectDir,
+    });
     process.exit(0);
   }
 
@@ -1212,6 +1476,11 @@ function main() {
     process.exit(0);
   }
 
+  // Extract model/token metadata for telemetry. When entries were not parsed
+  // (stdin supplied the text directly), entries is empty and getLastAssistantMeta
+  // returns defaults — that is acceptable.
+  const assistantMeta = getLastAssistantMeta(entries);
+
   const config = loadConfig();
   const maxBlocks = config.maxBlocksPerSession ?? 2;
 
@@ -1241,6 +1510,24 @@ function main() {
     // Unstructured response: run trigger audit on full text.
     triggerMatches = findTriggerMatches(lastAssistantText, config);
   }
+
+  // Base telemetry context shared across all exit paths below.
+  const telemetryBase = {
+    session_id: sessionId,
+    project_dir: projectDir,
+    model: assistantMeta.model,
+    output_tokens: assistantMeta.output_tokens,
+    cache_read_tokens: assistantMeta.cache_read_tokens,
+    response_snippet: lastAssistantText.slice(0, 300),
+    categories:
+      triggerMatches.length > 0
+        ? [...new Set(triggerMatches.map((m) => m.kind))]
+        : structuralErrors.length > 0
+          ? ['structural']
+          : [],
+    evidence: triggerMatches.map((m) => m.evidence),
+    error_codes: structuralErrors.map((e) => e.code),
+  };
 
   if (config.introspect) {
     // Introspection mode: log everything, never block.
@@ -1284,19 +1571,29 @@ function main() {
   if (structuralErrors.length === 0 && triggerMatches.length === 0) {
     const { statePath } = loadLoopState(sessionId);
     saveLoopState(statePath, { blocks: 0 });
+    writeTelemetry({ ...telemetryBase, event_type: 'allow', retry_count: 0 });
     process.exit(0);
   }
 
   if (structuralErrors.length > 0 && triggerMatches.length > 0) {
-    blockAndExit(sessionId, buildCombinedBlockReason(structuralErrors, triggerMatches), maxBlocks);
+    blockAndExit(sessionId, buildCombinedBlockReason(structuralErrors, triggerMatches), maxBlocks, {
+      ...telemetryBase,
+      event_type: 'structural_block',
+    });
   }
 
   if (structuralErrors.length > 0) {
-    blockAndExit(sessionId, buildStructuralBlockReason(structuralErrors), maxBlocks);
+    blockAndExit(sessionId, buildStructuralBlockReason(structuralErrors), maxBlocks, {
+      ...telemetryBase,
+      event_type: 'structural_block',
+    });
   }
 
   // Trigger matches only.
-  blockAndExit(sessionId, buildBlockReason(triggerMatches), maxBlocks);
+  blockAndExit(sessionId, buildBlockReason(triggerMatches), maxBlocks, {
+    ...telemetryBase,
+    event_type: 'block',
+  });
 }
 
 // Export internals for testing; run main() only when executed directly.
@@ -1338,4 +1635,8 @@ module.exports = {
   isWithinUncertaintyEnumeration,
   // Compact agent exemption
   isCompactAgentSession,
+  // Telemetry
+  writeTelemetry,
+  getLastAssistantMeta,
+  TELEMETRY_DB_PATH,
 };
