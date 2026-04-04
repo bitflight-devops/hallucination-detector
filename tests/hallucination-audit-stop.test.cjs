@@ -2110,7 +2110,7 @@ describe('maxBlocksPerSession from config', () => {
     stateFilePath = undefined;
   });
 
-  it('allows through after maxBlocksPerSession=1 when stop_hook_active is true', () => {
+  it('allows through after maxBlocksPerSession=1 when block count equals limit', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.hallucination-detectorrc.cjs'),
       'module.exports = { maxBlocksPerSession: 1 };',
@@ -2131,7 +2131,32 @@ describe('maxBlocksPerSession from config', () => {
     expect(stdout.trim()).toBe('');
   });
 
-  it('still blocks when blocks count has not exceeded maxBlocksPerSession=1', () => {
+  it('allows through on first call of a new turn when block count already equals limit (stop_hook_active=false)', () => {
+    // Root cause fix: allow-through must fire unconditionally when currentBlocks >= limit,
+    // regardless of stop_hook_active. Previously, stop_hook_active=false on the first
+    // call of any new turn meant the allow-through was unreachable even when the counter
+    // had already exceeded the limit from prior turns.
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { maxBlocksPerSession: 1 };',
+    );
+
+    const sessionId = `test-maxblocks-1-false-${Date.now()}`;
+    stateFilePath = path.join(os.tmpdir(), `claude-hallucination-audit-${sessionId}.json`);
+    fs.writeFileSync(stateFilePath, JSON.stringify({ blocks: 1 }), 'utf-8');
+
+    transcriptPath = makeTempTranscript('I think this is correct.');
+    const { stdout } = runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('still blocks when blocks count has not reached maxBlocksPerSession=1', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.hallucination-detectorrc.cjs'),
       'module.exports = { maxBlocksPerSession: 1 };',
@@ -2154,7 +2179,7 @@ describe('maxBlocksPerSession from config', () => {
     expect(parsed.decision).toBe('block');
   });
 
-  it('allows through after maxBlocksPerSession=5 at block count 5 with stop_hook_active', () => {
+  it('allows through after maxBlocksPerSession=5 at block count 5', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.hallucination-detectorrc.cjs'),
       'module.exports = { maxBlocksPerSession: 5 };',
@@ -2168,7 +2193,7 @@ describe('maxBlocksPerSession from config', () => {
     const { stdout } = runHook({
       session_id: sessionId,
       transcript_path: transcriptPath,
-      stop_hook_active: true,
+      stop_hook_active: false,
       hook_event_name: 'Stop',
     });
 
@@ -2184,11 +2209,115 @@ describe('maxBlocksPerSession from config', () => {
     const { stdout } = runHook({
       session_id: sessionId,
       transcript_path: transcriptPath,
-      stop_hook_active: true,
+      stop_hook_active: false,
       hook_event_name: 'Stop',
     });
 
     expect(stdout.trim()).toBe('');
+  });
+});
+
+// =============================================================================
+// Compact agent exemption
+// =============================================================================
+describe('compact agent exemption', () => {
+  let transcriptPath;
+
+  afterEach(() => {
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+    transcriptPath = undefined;
+  });
+
+  function makeTempTranscriptWithFirstHumanMessage(humanText, assistantText) {
+    const tmpFile = path.join(
+      os.tmpdir(),
+      `hd-compact-test-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+    );
+    const humanEntry = JSON.stringify({
+      type: 'user',
+      role: 'user',
+      content: humanText,
+    });
+    const assistantEntry = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: assistantText }] },
+    });
+    fs.writeFileSync(tmpFile, `${humanEntry}\n${assistantEntry}\n`, 'utf-8');
+    return tmpFile;
+  }
+
+  it('allows through when first human message contains compaction directive tag', () => {
+    transcriptPath = makeTempTranscriptWithFirstHumanMessage(
+      '<compaction_instructions>Summarize the above conversation.</compaction_instructions>',
+      'I think the issue is probably in the config because it seems misconfigured.',
+    );
+    const { stdout } = runHook({
+      session_id: `test-compact-tag-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('allows through when first human message contains "Your task is to create a summary"', () => {
+    transcriptPath = makeTempTranscriptWithFirstHumanMessage(
+      'Your task is to create a concise summary of the conversation above.',
+      'I think the issue is probably in the config.',
+    );
+    const { stdout } = runHook({
+      session_id: `test-compact-task-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('allows through when first human message contains "context window" and "summary"', () => {
+    transcriptPath = makeTempTranscriptWithFirstHumanMessage(
+      'The context window is getting large. Please produce a summary of the key points.',
+      'I think the answer is probably correct.',
+    );
+    const { stdout } = runHook({
+      session_id: `test-compact-ctxwin-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('allows through when first human message contains "Summarize the conversation"', () => {
+    transcriptPath = makeTempTranscriptWithFirstHumanMessage(
+      'Summarize the conversation so far into a compact context.',
+      'I think the answer is probably correct.',
+    );
+    const { stdout } = runHook({
+      session_id: `test-compact-summarize-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('does not exempt a normal session — detection runs and blocks triggering text', () => {
+    transcriptPath = makeTempTranscriptWithFirstHumanMessage(
+      'Please implement the feature described above.',
+      'I think the issue is probably in the config.',
+    );
+    const { stdout } = runHook({
+      session_id: `test-compact-normal-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+    expect(stdout.trim().length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.decision).toBe('block');
   });
 });
 

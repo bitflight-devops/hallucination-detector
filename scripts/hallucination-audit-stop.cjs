@@ -43,6 +43,66 @@ function safeReadFileText(filePath) {
   }
 }
 
+// Compaction directive patterns. When the first human-role message in the transcript
+// matches any of these, the session is a compact agent session and must be exempted
+// from all trigger detection. Compact agents summarize prior conversation content —
+// they cannot rephrase words like "may", "because", "since" that appear in the
+// conversation they are summarizing.
+const COMPACT_DIRECTIVE_PATTERNS = [
+  // Explicit compaction instruction tags
+  /<compaction_instructions>/i,
+  /\bcompaction\b/i,
+  // Task-based phrasing
+  /your task is to create a\b.{0,80}\bsummar/i,
+  // Context window summary requests
+  /\bcontext window\b.{0,80}\bsummar/i,
+  // Direct summarization imperatives
+  /\bsummariz[e]?\s+(?:the\s+)?conversation\b/i,
+  /\bsummariz[e]?\s+this\s+conversation\b/i,
+  // Condense phrasing
+  /\bcondense\b.{0,80}\bconversation\b/i,
+];
+
+/**
+ * Return true when the transcript at `transcriptPath` belongs to a compact agent
+ * session — detected by finding the first human-role JSONL record whose text
+ * matches one of COMPACT_DIRECTIVE_PATTERNS.
+ *
+ * Reads only the first 5 JSONL lines for performance.
+ *
+ * @param {string} transcriptPath
+ * @returns {boolean}
+ */
+function isCompactAgentSession(transcriptPath) {
+  if (!transcriptPath) return false;
+  let raw;
+  try {
+    raw = fs.readFileSync(transcriptPath, 'utf-8');
+  } catch {
+    return false;
+  }
+  const lines = raw.split('\n');
+  let checked = 0;
+  for (const line of lines) {
+    if (checked >= 5) break;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    checked++;
+    let record;
+    try {
+      record = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    // Match human/user role entries only
+    const role = record.role ?? record.type;
+    if (role !== 'user' && role !== 'human') continue;
+    const text = extractTextFromMessageContent(record.content ?? record.message?.content ?? '');
+    if (COMPACT_DIRECTIVE_PATTERNS.some((re) => re.test(text))) return true;
+  }
+  return false;
+}
+
 function parseJsonl(text) {
   const entries = [];
   for (const line of text.split('\n')) {
@@ -968,19 +1028,25 @@ const BLOCK_HEADER = 'Hallucination-detector STOP HOOK blocked this response.';
  * Apply the loop guard and emit a block decision if the limit has not been reached.
  * Always calls process.exit(0).
  *
+ * The allow-through fires unconditionally once the session block count reaches the
+ * limit — it does NOT require stopHookActive to be true. stopHookActive being false
+ * on the first call of a new turn was the previous bug: the counter accumulated across
+ * turns but the guard was unreachable on first-call-of-turn, producing up to 14 blocks
+ * against the documented limit of 2.
+ *
  * @param {string} sessionId
- * @param {boolean} stopHookActive
  * @param {string} reason
  * @param {number} [maxBlocks] - Maximum number of blocks before allowing through. Defaults to 2.
  */
-function blockAndExit(sessionId, stopHookActive, reason, maxBlocks) {
+function blockAndExit(sessionId, reason, maxBlocks) {
   const { statePath, data } = loadLoopState(sessionId);
-  const nextBlocks = Number(data.blocks || 0) + 1;
-  saveLoopState(statePath, { blocks: nextBlocks });
+  const currentBlocks = Number(data.blocks || 0);
   const limit = typeof maxBlocks === 'number' && maxBlocks >= 0 ? maxBlocks : 2;
-  if (nextBlocks > limit && stopHookActive) {
+  if (currentBlocks >= limit) {
+    // Already hit the limit in a prior call — allow through unconditionally.
     process.exit(0);
   }
+  saveLoopState(statePath, { blocks: currentBlocks + 1 });
   emitJson({ decision: 'block', reason });
   process.exit(0);
 }
@@ -1098,7 +1164,14 @@ function main() {
   const input = readStdinJson();
   const transcriptPath = input.transcript_path || '';
   const sessionId = input.session_id || '';
-  const stopHookActive = Boolean(input.stop_hook_active);
+
+  // Compact agent exemption: sessions whose first human message is a compaction
+  // directive are exempted from all detection. Compact agents summarize prior
+  // conversation content verbatim — they cannot avoid flagged phrases that
+  // appear in the conversation being summarized.
+  if (transcriptPath && isCompactAgentSession(transcriptPath)) {
+    process.exit(0);
+  }
 
   // Prefer last_assistant_message from stdin: Claude Code provides the current
   // turn's text directly, avoiding the race condition where the transcript is
@@ -1215,25 +1288,15 @@ function main() {
   }
 
   if (structuralErrors.length > 0 && triggerMatches.length > 0) {
-    blockAndExit(
-      sessionId,
-      stopHookActive,
-      buildCombinedBlockReason(structuralErrors, triggerMatches),
-      maxBlocks,
-    );
+    blockAndExit(sessionId, buildCombinedBlockReason(structuralErrors, triggerMatches), maxBlocks);
   }
 
   if (structuralErrors.length > 0) {
-    blockAndExit(
-      sessionId,
-      stopHookActive,
-      buildStructuralBlockReason(structuralErrors),
-      maxBlocks,
-    );
+    blockAndExit(sessionId, buildStructuralBlockReason(structuralErrors), maxBlocks);
   }
 
   // Trigger matches only.
-  blockAndExit(sessionId, stopHookActive, buildBlockReason(triggerMatches), maxBlocks);
+  blockAndExit(sessionId, buildBlockReason(triggerMatches), maxBlocks);
 }
 
 // Export internals for testing; run main() only when executed directly.
@@ -1273,4 +1336,6 @@ module.exports = {
   stripLabeledClaimLines,
   // Uncertainty enumeration suppression
   isWithinUncertaintyEnumeration,
+  // Compact agent exemption
+  isCompactAgentSession,
 };
