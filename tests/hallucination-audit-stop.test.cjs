@@ -2838,3 +2838,185 @@ describe('causality_language — since: temporal suppression', () => {
     expect(sinceMatches.length).toBeGreaterThan(0);
   });
 });
+
+// =============================================================================
+// SubagentStop event handling
+// =============================================================================
+describe('SubagentStop hook_event_name handling', () => {
+  let transcriptPath;
+
+  afterEach(() => {
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+    transcriptPath = undefined;
+  });
+
+  it('blocks when hook_event_name is SubagentStop and text contains trigger phrase', () => {
+    const assistantText = 'I think this is probably the right approach.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout } = runHook({
+      session_id: `test-subagent-block-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'SubagentStop',
+    });
+
+    expect(stdout.trim().length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.decision).toBe('block');
+    expect(parsed.reason).toContain('speculation_language');
+  });
+
+  it('allows through when hook_event_name is SubagentStop and text is clean', () => {
+    const assistantText = 'The fix has been applied. All three files were updated.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout } = runHook({
+      session_id: `test-subagent-allow-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'SubagentStop',
+    });
+
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('exits 0 without output when hook_event_name is unrecognised', () => {
+    const assistantText = 'I think this is probably the right approach.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout, status } = runHook({
+      session_id: `test-unknown-event-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'PreToolUse',
+    });
+
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+});
+
+// =============================================================================
+// SessionStart compact-source exemption
+// =============================================================================
+describe('SessionStart compact-source exemption', () => {
+  const SESSION_START_SCRIPT = path.resolve(
+    __dirname,
+    '../scripts/hallucination-framing-session-start.cjs',
+  );
+
+  function runSessionStart(stdinPayload) {
+    const result = spawnSync(process.execPath, [SESSION_START_SCRIPT], {
+      input: JSON.stringify(stdinPayload),
+      encoding: 'utf-8',
+      timeout: 10000,
+    });
+    return {
+      stdout: result.stdout || '',
+      stderr: result.stderr || '',
+      status: result.status,
+    };
+  }
+
+  it('exits 0 with no output when source is "compact"', () => {
+    const { stdout, status } = runSessionStart({
+      session_id: 'test-compact-session',
+      hook_event_name: 'SessionStart',
+      source: 'compact',
+      model: 'claude-sonnet-4-6',
+    });
+
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('emits framing JSON when source is "startup"', () => {
+    const { stdout, status } = runSessionStart({
+      session_id: 'test-startup-session',
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+      model: 'claude-sonnet-4-6',
+    });
+
+    expect(status).toBe(0);
+    expect(stdout.trim().length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed).toHaveProperty('hookSpecificOutput');
+    expect(parsed.hookSpecificOutput.hookEventName).toBe('SessionStart');
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('Hallucination Prevention');
+  });
+
+  it('emits framing JSON when source is "resume"', () => {
+    const { stdout, status } = runSessionStart({
+      session_id: 'test-resume-session',
+      hook_event_name: 'SessionStart',
+      source: 'resume',
+      model: 'claude-sonnet-4-6',
+    });
+
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('Hallucination Prevention');
+  });
+
+  it('emits framing JSON when source is "clear"', () => {
+    const { stdout, status } = runSessionStart({
+      session_id: 'test-clear-session',
+      hook_event_name: 'SessionStart',
+      source: 'clear',
+      model: 'claude-sonnet-4-6',
+    });
+
+    expect(status).toBe(0);
+    const parsed = JSON.parse(stdout.trim());
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('Hallucination Prevention');
+  });
+});
+
+// =============================================================================
+// Telemetry enrichment — stop_hook_active, permission_mode, hook_event_name
+// =============================================================================
+describe('telemetry enrichment — new fields', () => {
+  it('writeTelemetry does not throw when new fields are provided', () => {
+    expect(() => {
+      writeTelemetry({
+        event_type: 'block',
+        session_id: `test-enriched-${Date.now()}`,
+        categories: ['speculation_language'],
+        evidence: ['probably'],
+        stop_hook_active: 0,
+        permission_mode: 'default',
+        hook_event_name: 'Stop',
+      });
+    }).not.toThrow();
+  });
+
+  it('writeTelemetry does not throw when hook_event_name is SubagentStop', () => {
+    expect(() => {
+      writeTelemetry({
+        event_type: 'block',
+        session_id: `test-subagent-tel-${Date.now()}`,
+        categories: ['speculation_language'],
+        evidence: ['probably'],
+        stop_hook_active: 0,
+        permission_mode: 'bypassPermissions',
+        hook_event_name: 'SubagentStop',
+      });
+    }).not.toThrow();
+  });
+
+  it('writeTelemetry does not throw when stop_hook_active is 1', () => {
+    expect(() => {
+      writeTelemetry({
+        event_type: 'allow',
+        session_id: `test-sha-${Date.now()}`,
+        stop_hook_active: 1,
+        permission_mode: 'default',
+        hook_event_name: 'Stop',
+      });
+    }).not.toThrow();
+  });
+});

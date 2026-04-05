@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
  * SessionStart hook: inject hallucination-prevention behavioral framing into the
- * user's session context at startup, resume, clear, and compact events.
+ * user's session context at startup, resume, and clear events.
  *
  * Mechanism:
+ * - Reads the SessionStart JSON from stdin and checks the `source` field.
+ * - If source === 'compact', exits immediately — framing must not be injected
+ *   during compaction sessions (defence-in-depth alongside the hooks.json matcher).
  * - Writes framing text to stdout as additionalContext in SessionStart JSON output.
  * - Content mirrors the CLAUDE.md developer framing so plugin users receive the
  *   same behavioral constraints regardless of whether they have access to the repo.
@@ -12,13 +15,12 @@
  *
  * Notes:
  * - CJS only (.cjs) — no runtime dependencies.
- * - Reads stdin (hook input JSON) but does not use its fields — the framing is
- *   unconditional and session-scoped.
  * - Exit 0 always; framing failure is non-fatal.
  */
 
 'use strict';
 
+const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -117,16 +119,21 @@ To view a summary of detections and annotations:
 }
 
 /**
- * Read and discard stdin so the process does not hang when Claude Code pipes input.
+ * Read and parse the SessionStart JSON from stdin.
+ * Returns the parsed object, or an empty object on any parse failure.
  *
- * @returns {void}
+ * Blocks until EOF — required so the process exits cleanly when Claude Code
+ * pipes input.
+ *
+ * @returns {object}
  */
-function drainStdin() {
+function readStdinInput() {
   try {
-    // readFileSync(0) blocks until EOF — required so the process exits cleanly.
-    require('node:fs').readFileSync(0);
+    const raw = fs.readFileSync(0, 'utf-8');
+    return JSON.parse(raw);
   } catch {
-    // ignore — stdin may not be a pipe in some invocation contexts
+    // ignore — stdin may not be a pipe, or JSON may be malformed
+    return {};
   }
 }
 
@@ -147,7 +154,14 @@ function emitSessionStartContext(additionalContext) {
 }
 
 function main() {
-  drainStdin();
+  const input = readStdinInput();
+
+  // Defence-in-depth: the hooks.json matcher excludes 'compact' at the
+  // registration level, but guard here too in case the hook is invoked directly
+  // or the matcher is bypassed.
+  if (input.source === 'compact') {
+    process.exit(0);
+  }
 
   let framingText = FRAMING_TEXT;
   try {
@@ -170,4 +184,9 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { emitSessionStartContext, buildIntrospectFramingText, FRAMING_TEXT };
+module.exports = {
+  emitSessionStartContext,
+  buildIntrospectFramingText,
+  readStdinInput,
+  FRAMING_TEXT,
+};

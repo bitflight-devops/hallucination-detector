@@ -86,6 +86,23 @@ function getTelemetryDb() {
       CREATE INDEX IF NOT EXISTS idx_session_id ON hook_events(session_id);
       CREATE INDEX IF NOT EXISTS idx_event_type ON hook_events(event_type);
     `);
+    // Migrate existing databases that predate these columns.
+    // SQLite does not support ADD COLUMN IF NOT EXISTS — use try/catch per column.
+    try {
+      db.exec('ALTER TABLE hook_events ADD COLUMN stop_hook_active INTEGER');
+    } catch {
+      /* column already exists */
+    }
+    try {
+      db.exec('ALTER TABLE hook_events ADD COLUMN permission_mode TEXT');
+    } catch {
+      /* column already exists */
+    }
+    try {
+      db.exec('ALTER TABLE hook_events ADD COLUMN hook_event_name TEXT');
+    } catch {
+      /* column already exists */
+    }
     _telemetryDb = db;
     return db;
   } catch {
@@ -108,6 +125,9 @@ function getTelemetryDb() {
  * @param {number}   [event.cache_read_tokens]
  * @param {string}   [event.response_snippet]
  * @param {number}   [event.retry_count]
+ * @param {number}   [event.stop_hook_active] - 1 if stop_hook_active was true, 0 otherwise
+ * @param {string}   [event.permission_mode]
+ * @param {string}   [event.hook_event_name]
  */
 function writeTelemetry(event) {
   if (!telemetryAvailable) return;
@@ -126,8 +146,9 @@ function writeTelemetry(event) {
         ts, session_id, project_dir, model, event_type,
         categories, evidence, error_codes,
         output_tokens, cache_read_tokens, estimated_cost_usd,
-        response_snippet, retry_count
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        response_snippet, retry_count,
+        stop_hook_active, permission_mode, hook_event_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       Date.now(),
@@ -143,6 +164,9 @@ function writeTelemetry(event) {
       estimatedCost > 0 ? estimatedCost : null,
       event.response_snippet || null,
       event.retry_count ?? null,
+      event.stop_hook_active ?? null,
+      event.permission_mode || null,
+      event.hook_event_name || null,
     );
   } catch {
     // intentionally silent — telemetry failure must not affect hook behavior
@@ -1423,6 +1447,14 @@ function main() {
   const transcriptPath = input.transcript_path || '';
   const sessionId = input.session_id || '';
   const projectDir = input.cwd || null;
+  const stopHookActive = input.stop_hook_active === true;
+  const permissionMode = input.permission_mode || 'default';
+  const hookEventName = input.hook_event_name || 'Stop';
+
+  // Defensive guard: only handle known stop-hook events.
+  if (hookEventName !== 'Stop' && hookEventName !== 'SubagentStop') {
+    process.exit(0);
+  }
 
   // Compact agent exemption: sessions whose first human message is a compaction
   // directive are exempted from all detection. Compact agents summarize prior
@@ -1527,6 +1559,9 @@ function main() {
           : [],
     evidence: triggerMatches.map((m) => m.evidence),
     error_codes: structuralErrors.map((e) => e.code),
+    stop_hook_active: stopHookActive ? 1 : 0,
+    permission_mode: permissionMode,
+    hook_event_name: hookEventName,
   };
 
   if (config.introspect) {

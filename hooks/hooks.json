@@ -3,10 +3,13 @@
     "SessionStart": [
       {
         "description": "Inject hallucination-prevention behavioral framing at session start",
+        "matcher": "startup|resume|clear",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-framing-session-start.cjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-framing-session-start.cjs\"",
+            "timeout": 5,
+            "statusMessage": "Loading hallucination framing..."
           }
         ]
       }
@@ -17,7 +20,22 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-audit-stop.cjs\""
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-audit-stop.cjs\"",
+            "timeout": 10,
+            "statusMessage": "Auditing response..."
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "description": "Audit subagent output for hallucination patterns",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-audit-stop.cjs\"",
+            "timeout": 10,
+            "statusMessage": "Auditing subagent response..."
           }
         ]
       }
