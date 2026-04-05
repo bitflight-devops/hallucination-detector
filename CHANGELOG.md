@@ -1,3 +1,9 @@
+## [1.16.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.4...v1.16.0) (2026-04-05)
+
+### Features
+
+- **config:** add per-category confidence thresholds ([04cec7d](https://github.com/bitflight-devops/hallucination-detector/commit/04cec7d64f057ee5cf553cbc449a49b1e6a5a0f9)), closes [#64](https://github.com/bitflight-devops/hallucination-detector/issues/64)
+
 ## [1.15.4](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.3...v1.15.4) (2026-04-05)
 
 ### Bug Fixes
