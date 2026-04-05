@@ -620,10 +620,13 @@ function findTriggerMatches(text, config = {}) {
         matches.push({ kind: 'causality_language', evidence: m[0].trim() });
       }
 
+      const DEFINITIONAL_CAUSE_RE =
+        /\b(?:cause|reason|explanation|root\s+cause)\s+(?:of|for|behind)\s+(?:false\s+positives?|errors?|failures?|bugs?|issues?|this\s+(?:pattern|behavior|behaviour))\b/i;
       for (const re of NOMINALIZED_CAUSALITY) {
         const m = haystack.match(re);
         if (!m) continue;
         if (isIndexWithinQuestion(haystack, m.index)) continue;
+        if (DEFINITIONAL_CAUSE_RE.test(haystack.slice(m.index, m.index + 80))) continue;
         if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
         matches.push({ kind: 'causality_language', evidence: m[0].trim() });
       }
