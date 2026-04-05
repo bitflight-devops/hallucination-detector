@@ -3,13 +3,9 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
-
 const {
   findNewSessionFiles,
   parseBlockEvents,
-  DB_PATH,
-  openDb,
   _openDbAt,
   MAX_FILE_SIZE_BYTES,
 } = require('../scripts/hallucination-audit-incremental.cjs');
