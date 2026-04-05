@@ -1,3 +1,9 @@
+## [1.15.4](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.3...v1.15.4) (2026-04-05)
+
+### Bug Fixes
+
+- **lint:** reformat plugin.json files to satisfy Biome formatter ([a47fa36](https://github.com/bitflight-devops/hallucination-detector/commit/a47fa36d0bdaabc0f9fa654f0a45742c887e9808))
+
 ## [1.15.3](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.2...v1.15.3) (2026-04-05)
 
 ### Bug Fixes
