@@ -8,9 +8,11 @@ const {
   loadConfig,
   loadWeights,
   mergeConfig,
+  isValidCategoryThreshold,
   DEFAULT_WEIGHTS,
   DEFAULT_THRESHOLDS,
   DEFAULT_CONFIG,
+  getProjectConfigPath,
 } = require('../scripts/hallucination-config.cjs');
 
 // =============================================================================
@@ -819,5 +821,534 @@ describe('loadConfig cascading priority', () => {
     } finally {
       fs.rmSync(tmpHome, { recursive: true });
     }
+  });
+});
+
+// =============================================================================
+// New DEFAULT_CONFIG fields — warnOnly, ignoreCategories, blockSubagents, blockUserSessions
+// =============================================================================
+describe('DEFAULT_CONFIG new session-gating fields', () => {
+  it('has warnOnly: false', () => {
+    expect(DEFAULT_CONFIG.warnOnly).toBe(false);
+  });
+
+  it('has ignoreCategories: []', () => {
+    expect(Array.isArray(DEFAULT_CONFIG.ignoreCategories)).toBe(true);
+    expect(DEFAULT_CONFIG.ignoreCategories).toHaveLength(0);
+  });
+
+  it('has blockSubagents: false', () => {
+    expect(DEFAULT_CONFIG.blockSubagents).toBe(false);
+  });
+
+  it('has blockUserSessions: true', () => {
+    expect(DEFAULT_CONFIG.blockUserSessions).toBe(true);
+  });
+});
+
+// =============================================================================
+// getProjectConfigPath
+// =============================================================================
+describe('getProjectConfigPath', () => {
+  let savedEnv;
+
+  beforeEach(() => {
+    savedEnv = process.env.CLAUDE_PROJECT_DIR;
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env.CLAUDE_PROJECT_DIR;
+    } else {
+      process.env.CLAUDE_PROJECT_DIR = savedEnv;
+    }
+  });
+
+  it('returns null when CLAUDE_PROJECT_DIR is unset', () => {
+    delete process.env.CLAUDE_PROJECT_DIR;
+    expect(getProjectConfigPath()).toBeNull();
+  });
+
+  it('returns null when CLAUDE_PROJECT_DIR is empty string', () => {
+    process.env.CLAUDE_PROJECT_DIR = '';
+    expect(getProjectConfigPath()).toBeNull();
+  });
+
+  it('returns path joined with .hd/config.json when CLAUDE_PROJECT_DIR is set', () => {
+    process.env.CLAUDE_PROJECT_DIR = '/some/project';
+    const result = getProjectConfigPath();
+    expect(result).toBe(path.join('/some/project', '.hd', 'config.json'));
+  });
+});
+
+// =============================================================================
+// loadConfig — project-level cascade ($CLAUDE_PROJECT_DIR/.hd/config.json)
+// =============================================================================
+describe('loadConfig project-level cascade', () => {
+  let tmpDir;
+  let tmpProject;
+  let originalCwd;
+  let savedProjectDir;
+  let savedEnv;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-proj-test-${Date.now()}-`));
+    tmpProject = fs.mkdtempSync(path.join(os.tmpdir(), `hd-projdir-${Date.now()}-`));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+    savedProjectDir = process.env.CLAUDE_PROJECT_DIR;
+    savedEnv = process.env.HALLUCINATION_DETECTOR_CONFIG;
+    delete process.env.HALLUCINATION_DETECTOR_CONFIG;
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true });
+    fs.rmSync(tmpProject, { recursive: true });
+    if (savedProjectDir === undefined) {
+      delete process.env.CLAUDE_PROJECT_DIR;
+    } else {
+      process.env.CLAUDE_PROJECT_DIR = savedProjectDir;
+    }
+    if (savedEnv === undefined) {
+      delete process.env.HALLUCINATION_DETECTOR_CONFIG;
+    } else {
+      process.env.HALLUCINATION_DETECTOR_CONFIG = savedEnv;
+    }
+  });
+
+  it('loads config from $CLAUDE_PROJECT_DIR/.hd/config.json', () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpProject;
+    const hdDir = path.join(tmpProject, '.hd');
+    fs.mkdirSync(hdDir, { recursive: true });
+    fs.writeFileSync(path.join(hdDir, 'config.json'), JSON.stringify({ debug: true }));
+    const config = loadConfig();
+    expect(config.debug).toBe(true);
+  });
+
+  it('project config overrides global ~/.hd/config.json', () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), `hd-home3-${Date.now()}-`));
+    try {
+      // Global sets severity=warning; project sets severity=info
+      const globalHdDir = path.join(tmpHome, '.hd');
+      fs.mkdirSync(globalHdDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(globalHdDir, 'config.json'),
+        JSON.stringify({ severity: 'warning' }),
+      );
+
+      process.env.CLAUDE_PROJECT_DIR = tmpProject;
+      const hdDir = path.join(tmpProject, '.hd');
+      fs.mkdirSync(hdDir, { recursive: true });
+      fs.writeFileSync(path.join(hdDir, 'config.json'), JSON.stringify({ severity: 'info' }));
+
+      const config = loadConfig({ _homeDir: tmpHome });
+      expect(config.severity).toBe('info');
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true });
+    }
+  });
+
+  it('HALLUCINATION_DETECTOR_CONFIG env var overrides project config', () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpProject;
+    const hdDir = path.join(tmpProject, '.hd');
+    fs.mkdirSync(hdDir, { recursive: true });
+    fs.writeFileSync(path.join(hdDir, 'config.json'), JSON.stringify({ severity: 'info' }));
+
+    const envCfgPath = path.join(tmpDir, 'override.json');
+    fs.writeFileSync(envCfgPath, JSON.stringify({ severity: 'warning' }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = envCfgPath;
+
+    const config = loadConfig();
+    expect(config.severity).toBe('warning');
+  });
+
+  it('gracefully handles missing $CLAUDE_PROJECT_DIR/.hd/config.json', () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpProject;
+    // No .hd/config.json written — should fall back to defaults silently
+    const config = loadConfig();
+    expect(config.debug).toBe(false);
+  });
+
+  it('gracefully handles invalid JSON in project config', () => {
+    process.env.CLAUDE_PROJECT_DIR = tmpProject;
+    const hdDir = path.join(tmpProject, '.hd');
+    fs.mkdirSync(hdDir, { recursive: true });
+    fs.writeFileSync(path.join(hdDir, 'config.json'), '{ invalid json ]]]');
+    const config = loadConfig();
+    expect(config.debug).toBe(false);
+  });
+
+  it('project config arrays replace (not append) corresponding global arrays', () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), `hd-home4-${Date.now()}-`));
+    try {
+      const globalHdDir = path.join(tmpHome, '.hd');
+      fs.mkdirSync(globalHdDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(globalHdDir, 'config.json'),
+        JSON.stringify({ allowlist: ['probably', 'likely'] }),
+      );
+
+      process.env.CLAUDE_PROJECT_DIR = tmpProject;
+      const hdDir = path.join(tmpProject, '.hd');
+      fs.mkdirSync(hdDir, { recursive: true });
+      fs.writeFileSync(path.join(hdDir, 'config.json'), JSON.stringify({ allowlist: ['maybe'] }));
+
+      const config = loadConfig({ _homeDir: tmpHome });
+      // Arrays replace — project value wins entirely, global value discarded
+      expect(config.allowlist).toEqual(['maybe']);
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true });
+    }
+  });
+});
+
+// =============================================================================
+// loadConfig — global ~/.hd/config.json source
+// =============================================================================
+describe('loadConfig from global ~/.hd/config.json', () => {
+  let tmpDir;
+  let tmpHome;
+  let originalCwd;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-ghd-test-${Date.now()}-`));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), `hd-ghddir-${Date.now()}-`));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true });
+    fs.rmSync(tmpHome, { recursive: true });
+  });
+
+  it('reads ~/.hd/config.json via _homeDir option', () => {
+    const hdDir = path.join(tmpHome, '.hd');
+    fs.mkdirSync(hdDir, { recursive: true });
+    fs.writeFileSync(path.join(hdDir, 'config.json'), JSON.stringify({ debug: true }));
+    const config = loadConfig({ _homeDir: tmpHome });
+    expect(config.debug).toBe(true);
+  });
+
+  it('project.json overrides ~/.hd/config.json', () => {
+    const hdDir = path.join(tmpHome, '.hd');
+    fs.mkdirSync(hdDir, { recursive: true });
+    fs.writeFileSync(path.join(hdDir, 'config.json'), JSON.stringify({ severity: 'warning' }));
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { severity: 'info' } }),
+    );
+    const config = loadConfig({ _homeDir: tmpHome });
+    expect(config.severity).toBe('info');
+  });
+
+  it('gracefully handles invalid JSON in ~/.hd/config.json', () => {
+    const hdDir = path.join(tmpHome, '.hd');
+    fs.mkdirSync(hdDir, { recursive: true });
+    fs.writeFileSync(path.join(hdDir, 'config.json'), '{ not valid ]');
+    const config = loadConfig({ _homeDir: tmpHome });
+    expect(config.debug).toBe(false);
+  });
+});
+
+// =============================================================================
+// schema validation — new fields
+// =============================================================================
+describe('schema validation for new session-gating fields', () => {
+  let tmpDir;
+  let originalCwd;
+  let stderrOutput;
+  let originalStderrWrite;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-newval-test-${Date.now()}-`));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+    stderrOutput = '';
+    originalStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (msg) => {
+      stderrOutput += msg;
+      return true;
+    };
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    process.stderr.write = originalStderrWrite;
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('invalid warnOnly falls back to false with a stderr warning', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { warnOnly: 'yes' } }),
+    );
+    const config = loadConfig();
+    expect(config.warnOnly).toBe(false);
+    expect(stderrOutput).toContain('warnOnly');
+  });
+
+  it('invalid blockSubagents falls back to false with a stderr warning', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { blockSubagents: 1 } }),
+    );
+    const config = loadConfig();
+    expect(config.blockSubagents).toBe(false);
+    expect(stderrOutput).toContain('blockSubagents');
+  });
+
+  it('invalid blockUserSessions falls back to true with a stderr warning', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { blockUserSessions: 'no' } }),
+    );
+    const config = loadConfig();
+    expect(config.blockUserSessions).toBe(true);
+    expect(stderrOutput).toContain('blockUserSessions');
+  });
+
+  it('invalid ignoreCategories (non-array) falls back to [] with a stderr warning', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { ignoreCategories: 'speculation_language' } }),
+    );
+    const config = loadConfig();
+    expect(config.ignoreCategories).toEqual([]);
+    expect(stderrOutput).toContain('ignoreCategories');
+  });
+
+  it('valid array ignoreCategories is accepted without warnings', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({
+        'hallucination-detector': {
+          ignoreCategories: ['speculation_language', 'causality_language'],
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.ignoreCategories).toEqual(['speculation_language', 'causality_language']);
+    expect(stderrOutput).toBe('');
+  });
+});
+
+// =============================================================================
+// per-category thresholds
+// =============================================================================
+describe('per-category thresholds', () => {
+  // --- DEFAULT_CONFIG.categories ---
+  it('DEFAULT_CONFIG.categories is an empty object', () => {
+    expect(DEFAULT_CONFIG.categories).toEqual({});
+  });
+
+  // --- isValidCategoryThreshold ---
+  describe('isValidCategoryThreshold', () => {
+    it('returns true for a valid { uncertain: 0.3, hallucinated: 0.6 } pair', () => {
+      expect(isValidCategoryThreshold({ uncertain: 0.3, hallucinated: 0.6 })).toBe(true);
+    });
+
+    it('returns false when uncertain > hallucinated (inverted pair)', () => {
+      expect(isValidCategoryThreshold({ uncertain: 0.7, hallucinated: 0.3 })).toBe(false);
+    });
+
+    it('returns false when uncertain is out of range (> 1)', () => {
+      expect(isValidCategoryThreshold({ uncertain: 1.5, hallucinated: 0.6 })).toBe(false);
+    });
+
+    it('returns false when hallucinated field is missing', () => {
+      expect(isValidCategoryThreshold({ uncertain: 0.3 })).toBe(false);
+    });
+
+    it('returns false when uncertain is a non-numeric string', () => {
+      expect(isValidCategoryThreshold({ uncertain: 'bad', hallucinated: 0.6 })).toBe(false);
+    });
+
+    it('returns false for null input', () => {
+      expect(isValidCategoryThreshold(null)).toBe(false);
+    });
+
+    it('returns false for undefined input', () => {
+      expect(isValidCategoryThreshold(undefined)).toBe(false);
+    });
+
+    it('returns true when uncertain === hallucinated (boundary)', () => {
+      expect(isValidCategoryThreshold({ uncertain: 0.5, hallucinated: 0.5 })).toBe(true);
+    });
+  });
+
+  // --- validateConfig categories via loadConfig ---
+  describe('validateConfig categories via loadConfig', () => {
+    let tmpDir;
+    let originalCwd;
+    let stderrOutput;
+    let originalStderrWrite;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-cat-test-${Date.now()}-`));
+      originalCwd = process.cwd();
+      process.chdir(tmpDir);
+      stderrOutput = '';
+      originalStderrWrite = process.stderr.write.bind(process.stderr);
+      process.stderr.write = (msg) => {
+        stderrOutput += msg;
+        return true;
+      };
+    });
+
+    afterEach(() => {
+      process.chdir(originalCwd);
+      process.stderr.write = originalStderrWrite;
+      fs.rmSync(tmpDir, { recursive: true });
+    });
+
+    it('valid category threshold entry is preserved in loaded config', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'project.json'),
+        JSON.stringify({
+          'hallucination-detector': {
+            categories: {
+              speculation_language: { uncertain: 0.5, hallucinated: 0.8 },
+            },
+          },
+        }),
+      );
+      const config = loadConfig();
+      expect(config.categories.speculation_language.uncertain).toBe(0.5);
+      expect(config.categories.speculation_language.hallucinated).toBe(0.8);
+      expect(stderrOutput).toBe('');
+    });
+
+    it('invalid threshold pair has threshold fields deleted but entry is otherwise preserved', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'project.json'),
+        JSON.stringify({
+          'hallucination-detector': {
+            categories: {
+              speculation_language: { uncertain: 'bad', hallucinated: 0.6, enabled: true },
+            },
+          },
+        }),
+      );
+      const config = loadConfig();
+      // Entry itself must be preserved
+      expect(config.categories).toHaveProperty('speculation_language');
+      expect(config.categories.speculation_language.enabled).toBe(true);
+      // Threshold fields must be deleted
+      expect(config.categories.speculation_language).not.toHaveProperty('uncertain');
+      expect(config.categories.speculation_language).not.toHaveProperty('hallucinated');
+      // Warning emitted referencing the category name
+      expect(stderrOutput).toContain('speculation_language');
+    });
+
+    it('unknown category name entry is preserved with a warning (not stripped)', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'project.json'),
+        JSON.stringify({
+          'hallucination-detector': {
+            categories: {
+              future_category: { uncertain: 0.4, hallucinated: 0.7 },
+            },
+          },
+        }),
+      );
+      const config = loadConfig();
+      // Entry is preserved despite being an unknown category name
+      expect(config.categories).toHaveProperty('future_category');
+      expect(config.categories.future_category.uncertain).toBe(0.4);
+      expect(config.categories.future_category.hallucinated).toBe(0.7);
+      // Warning emitted for the unknown name
+      expect(stderrOutput).toContain('future_category');
+    });
+
+    it('categories: null causes field to fall back to default empty object with warning', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'project.json'),
+        JSON.stringify({
+          'hallucination-detector': {
+            categories: null,
+          },
+        }),
+      );
+      const config = loadConfig();
+      expect(config.categories).toEqual({});
+      expect(stderrOutput).toContain('categories');
+    });
+
+    it('mixed valid and unknown entries are all preserved (unknown only warned)', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'project.json'),
+        JSON.stringify({
+          'hallucination-detector': {
+            categories: {
+              speculation_language: { uncertain: 0.4, hallucinated: 0.7 },
+              my_custom_category: { uncertain: 0.2, hallucinated: 0.5 },
+            },
+          },
+        }),
+      );
+      const config = loadConfig();
+      expect(config.categories.speculation_language.uncertain).toBe(0.4);
+      expect(config.categories.my_custom_category.uncertain).toBe(0.2);
+      // Warning for the unknown name only
+      expect(stderrOutput).toContain('my_custom_category');
+      expect(stderrOutput).not.toContain('speculation_language');
+    });
+
+    it('mutating a frozen per-category threshold throws TypeError', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'project.json'),
+        JSON.stringify({
+          'hallucination-detector': {
+            categories: {
+              speculation_language: { uncertain: 0.5, hallucinated: 0.8 },
+            },
+          },
+        }),
+      );
+      const config = loadConfig();
+      expect(() => {
+        config.categories.speculation_language.uncertain = 999;
+      }).toThrow(TypeError);
+    });
+  });
+
+  // --- mergeConfig per-category threshold merging ---
+  describe('mergeConfig per-category threshold merging', () => {
+    it('project-level threshold overrides global-level threshold for the same category', () => {
+      const base = {
+        categories: {
+          speculation_language: { uncertain: 0.3, hallucinated: 0.6 },
+        },
+      };
+      const override = {
+        categories: {
+          speculation_language: { uncertain: 0.5, hallucinated: 0.8 },
+        },
+      };
+      const merged = mergeConfig(base, override);
+      expect(merged.categories.speculation_language.uncertain).toBe(0.5);
+      expect(merged.categories.speculation_language.hallucinated).toBe(0.8);
+    });
+
+    it('different category entries at each level are merged into a union', () => {
+      const base = {
+        categories: {
+          speculation_language: { uncertain: 0.3, hallucinated: 0.6 },
+        },
+      };
+      const override = {
+        categories: {
+          causality_language: { uncertain: 0.4, hallucinated: 0.7 },
+        },
+      };
+      const merged = mergeConfig(base, override);
+      expect(merged.categories).toHaveProperty('speculation_language');
+      expect(merged.categories).toHaveProperty('causality_language');
+      expect(merged.categories.speculation_language.uncertain).toBe(0.3);
+      expect(merged.categories.causality_language.uncertain).toBe(0.4);
+    });
   });
 });

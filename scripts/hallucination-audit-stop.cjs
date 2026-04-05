@@ -31,11 +31,21 @@ try {
   // node:sqlite unavailable — telemetry disabled, hook continues normally
 }
 
+// Shared DB helper: provides openDb() and the stop_hook_log / block_matches tables.
+// Wrapped in try/catch — a missing or broken module must never affect hook behavior.
+let _db_helper = null;
+try {
+  _db_helper = require('./hallucination-db.cjs');
+} catch {
+  /* telemetry unavailable */
+}
+
 const {
   loadConfig,
   loadWeights,
   DEFAULT_WEIGHTS,
   DEFAULT_THRESHOLDS,
+  isValidCategoryThreshold,
 } = require('./hallucination-config.cjs');
 const {
   validateClaimStructure,
@@ -207,6 +217,75 @@ function writeShadowLog(event) {
     fs.appendFileSync(SHADOW_LOG_PATH, `${JSON.stringify(record)}\n`, 'utf-8');
   } catch {
     // intentionally silent — shadow log failure must not affect hook behavior
+  }
+}
+
+/**
+ * Write a record to `stop_hook_log` and, when the decision is 'block', one row
+ * per match to `block_matches`. Uses a transaction for atomicity.
+ *
+ * All errors are silently swallowed — DB failure must never affect hook behavior.
+ *
+ * @param {object} opts
+ * @param {string}   opts.sessionId
+ * @param {string}   opts.decision              - 'block', 'allow', or 'skipped_config'
+ * @param {boolean}  opts.isRetry               - true when stop_hook_active was true
+ * @param {boolean}  opts.isStructured          - true when the response had claim labels
+ * @param {number}   [opts.responseLengthChars]
+ * @param {number}   [opts.blocksSoFar]         - current block count before this decision
+ * @param {number}   [opts.priorBlockId]        - id of the preceding block row in this session
+ * @param {string}   [opts.responseSnippet]     - first 500 chars of the assistant response
+ * @param {Array<{kind: string, evidence: string, wasIgnored?: boolean}>} [opts.matches] - trigger matches
+ */
+function writeStopHookLog(opts) {
+  if (!_db_helper) return;
+  try {
+    const db = _db_helper.openDb();
+    try {
+      db.exec('BEGIN');
+      const insertLog = db.prepare(
+        `INSERT INTO stop_hook_log
+           (session_id, ts, decision, is_retry, is_structured, response_length_chars, blocks_so_far,
+            prior_block_id, response_snippet)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insertLog.run(
+        opts.sessionId || '',
+        Date.now(),
+        opts.decision,
+        opts.isRetry ? 1 : 0,
+        opts.isStructured ? 1 : 0,
+        opts.responseLengthChars ?? null,
+        opts.blocksSoFar ?? null,
+        opts.priorBlockId ?? null,
+        opts.responseSnippet ?? null,
+      );
+      const logId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+
+      if (Array.isArray(opts.matches) && opts.matches.length > 0) {
+        const insertMatch = db.prepare(
+          'INSERT INTO block_matches (log_id, category, evidence, was_ignored) VALUES (?, ?, ?, ?)',
+        );
+        for (const m of opts.matches) {
+          insertMatch.run(logId, m.kind || '', m.evidence ?? null, m.wasIgnored ? 1 : 0);
+        }
+      }
+      db.exec('COMMIT');
+    } catch {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        /* ignore rollback failure */
+      }
+    } finally {
+      try {
+        db.close();
+      } catch {
+        /* ignore close failure */
+      }
+    }
+  } catch {
+    /* openDb failed — telemetry unavailable */
   }
 }
 
@@ -1700,7 +1779,25 @@ function scoreText(text, weights, thresholds, config) {
   return sentences.map((sentence, index) => {
     const scores = scoreSentence(sentence, config);
     const aggregateScore = aggregateWeightedScore(scores, weights);
-    const label = getLabelForScore(aggregateScore, thresholds);
+    const activeEntries = Object.entries(scores).filter(([, v]) => v > 0);
+    let effectiveThresholds = thresholds;
+    if (activeEntries.length === 1) {
+      const categoryName = activeEntries[0][0];
+      const catEntry = config?.categories?.[categoryName];
+      if (
+        catEntry &&
+        isValidCategoryThreshold({
+          uncertain: catEntry.uncertain,
+          hallucinated: catEntry.hallucinated,
+        })
+      ) {
+        effectiveThresholds = {
+          uncertain: catEntry.uncertain,
+          hallucinated: catEntry.hallucinated,
+        };
+      }
+    }
+    const label = getLabelForScore(aggregateScore, effectiveThresholds);
     return { sentence, index, total, scores, aggregateScore, label };
   });
 }
@@ -2137,6 +2234,48 @@ function main() {
     triggerMatches = triggerMatches.filter((m) => m.kind !== 'unsupported_absence');
   }
 
+  // ignoreCategories: split trigger matches into active (block-capable) and ignored.
+  // Ignored matches are still written to block_matches with was_ignored=1 for telemetry.
+  const ignoreSet = new Set(Array.isArray(config.ignoreCategories) ? config.ignoreCategories : []);
+  let activeTriggerMatches = triggerMatches;
+  let ignoredTriggerMatches = [];
+  if (ignoreSet.size > 0) {
+    activeTriggerMatches = triggerMatches.filter((m) => !ignoreSet.has(m.kind));
+    ignoredTriggerMatches = triggerMatches
+      .filter((m) => ignoreSet.has(m.kind))
+      .map((m) => ({ ...m, wasIgnored: true }));
+  }
+
+  // responseSnippet: first 500 chars, captured once and reused for DB and telemetry.
+  const responseSnippet = lastAssistantText.slice(0, 500);
+
+  // priorBlockId: when this is a retry (stop_hook_active=true), look up the most recent
+  // block row for this session so we can link allow-with-retry back to its block.
+  let priorBlockId = null;
+  if (stopHookActive && _db_helper) {
+    try {
+      const db = _db_helper.openDb();
+      try {
+        const row = db
+          .prepare(
+            `SELECT id FROM stop_hook_log
+             WHERE session_id = ? AND decision = 'block'
+             ORDER BY ts DESC LIMIT 1`,
+          )
+          .get(sessionId);
+        if (row) priorBlockId = row.id;
+      } finally {
+        try {
+          db.close();
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      /* DB unavailable — priorBlockId stays null */
+    }
+  }
+
   // Base telemetry context shared across all exit paths below.
   const telemetryBase = {
     session_id: sessionId,
@@ -2144,14 +2283,14 @@ function main() {
     model: assistantMeta.model,
     output_tokens: assistantMeta.output_tokens,
     cache_read_tokens: assistantMeta.cache_read_tokens,
-    response_snippet: lastAssistantText.slice(0, 300),
+    response_snippet: responseSnippet.slice(0, 300),
     categories:
-      triggerMatches.length > 0
-        ? [...new Set(triggerMatches.map((m) => m.kind))]
+      activeTriggerMatches.length > 0
+        ? [...new Set(activeTriggerMatches.map((m) => m.kind))]
         : structuralErrors.length > 0
           ? ['structural']
           : [],
-    evidence: triggerMatches.map((m) => m.evidence),
+    evidence: activeTriggerMatches.map((m) => m.evidence),
     error_codes: structuralErrors.map((e) => e.code),
     stop_hook_active: stopHookActive ? 1 : 0,
     permission_mode: permissionMode,
@@ -2162,7 +2301,7 @@ function main() {
     // Introspection mode: log everything, never block.
     const { statePath, data } = loadLoopState(sessionId);
     const blocks = Number(data.blocks || 0);
-    const hasIssues = structuralErrors.length > 0 || triggerMatches.length > 0;
+    const hasIssues = structuralErrors.length > 0 || activeTriggerMatches.length > 0;
     const nextBlocks = hasIssues ? blocks + 1 : 0;
     saveLoopState(statePath, { blocks: nextBlocks });
 
@@ -2174,7 +2313,7 @@ function main() {
     const sentenceScores = scoreText(lastAssistantText, config.weights, config.thresholds, config);
 
     const categoryCounts = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
-    for (const m of triggerMatches) {
+    for (const m of activeTriggerMatches) {
       if (Object.hasOwn(categoryCounts, m.kind)) {
         categoryCounts[m.kind] += 1;
       }
@@ -2185,8 +2324,8 @@ function main() {
       sessionId,
       wouldBlock,
       structuralErrorCount: structuralErrors.length,
-      matchCount: triggerMatches.length,
-      matches: triggerMatches.map((m) => ({ kind: m.kind, evidence: m.evidence })),
+      matchCount: activeTriggerMatches.length,
+      matches: activeTriggerMatches.map((m) => ({ kind: m.kind, evidence: m.evidence })),
       sentenceScores,
       textLength: lastAssistantText.length,
       textHash: hashText(lastAssistantText),
@@ -2196,22 +2335,70 @@ function main() {
     process.exit(0);
   }
 
-  // Decide block reason based on what was found.
-  if (structuralErrors.length === 0 && triggerMatches.length === 0) {
-    const { statePath } = loadLoopState(sessionId);
-    saveLoopState(statePath, { blocks: 0 });
-    writeTelemetry({ ...telemetryBase, event_type: 'allow', retry_count: 0 });
+  // blockSubagents / blockUserSessions: check whether this session type should be blocked.
+  // SubagentStop events fire on subagent sessions; Stop fires on user-facing sessions.
+  const isSubagentSession = hookEventName === 'SubagentStop';
+  const sessionTypeBlocked = isSubagentSession ? config.blockSubagents : config.blockUserSessions;
+  if (!sessionTypeBlocked) {
+    writeTelemetry({ ...telemetryBase, event_type: 'skipped_config' });
+    writeStopHookLog({
+      sessionId,
+      decision: 'skipped_config',
+      isRetry: stopHookActive,
+      isStructured: structureResult.structured,
+      responseLengthChars: lastAssistantText.length,
+      blocksSoFar: currentBlockCount,
+      priorBlockId,
+      responseSnippet,
+      matches: [...activeTriggerMatches, ...ignoredTriggerMatches],
+    });
     process.exit(0);
   }
 
-  // Shadow mode: log would-block decisions without actually blocking.
+  // Decide block reason based on what was found (using only active non-ignored matches).
+  if (structuralErrors.length === 0 && activeTriggerMatches.length === 0) {
+    const { statePath } = loadLoopState(sessionId);
+    saveLoopState(statePath, { blocks: 0 });
+    writeTelemetry({ ...telemetryBase, event_type: 'allow', retry_count: 0 });
+    writeStopHookLog({
+      sessionId,
+      decision: 'allow',
+      isRetry: stopHookActive,
+      isStructured: structureResult.structured,
+      responseLengthChars: lastAssistantText.length,
+      blocksSoFar: currentBlockCount,
+      priorBlockId,
+      responseSnippet,
+      matches: ignoredTriggerMatches,
+    });
+    process.exit(0);
+  }
+
+  // Shadow mode (dryRun): log would-block decisions without actually blocking.
   if (config.dryRun) {
     writeShadowLog({
       sessionId,
       model: assistantMeta.model,
       categories: telemetryBase.categories,
       evidence: telemetryBase.evidence.join(', '),
-      responseSnippet: lastAssistantText.slice(0, 300),
+      responseSnippet: responseSnippet.slice(0, 300),
+    });
+    process.exit(0);
+  }
+
+  // warnOnly: write telemetry as normal but emit nothing to stdout — hook logs without stopping.
+  if (config.warnOnly) {
+    writeTelemetry({ ...telemetryBase, event_type: 'warn_only' });
+    writeStopHookLog({
+      sessionId,
+      decision: 'block',
+      isRetry: stopHookActive,
+      isStructured: structureResult.structured,
+      responseLengthChars: lastAssistantText.length,
+      blocksSoFar: currentBlockCount,
+      priorBlockId,
+      responseSnippet,
+      matches: [...activeTriggerMatches, ...ignoredTriggerMatches],
     });
     process.exit(0);
   }
@@ -2223,14 +2410,38 @@ function main() {
     config,
   );
 
-  if (structuralErrors.length > 0 && triggerMatches.length > 0) {
-    blockAndExit(sessionId, buildCombinedBlockReason(structuralErrors, triggerMatches), maxBlocks, {
-      ...telemetryBase,
-      event_type: 'structural_block',
+  if (structuralErrors.length > 0 && activeTriggerMatches.length > 0) {
+    writeStopHookLog({
+      sessionId,
+      decision: 'block',
+      isRetry: stopHookActive,
+      isStructured: structureResult.structured,
+      responseLengthChars: lastAssistantText.length,
+      blocksSoFar: currentBlockCount,
+      priorBlockId,
+      responseSnippet,
+      matches: [...activeTriggerMatches, ...ignoredTriggerMatches],
     });
+    blockAndExit(
+      sessionId,
+      buildCombinedBlockReason(structuralErrors, activeTriggerMatches),
+      maxBlocks,
+      { ...telemetryBase, event_type: 'structural_block' },
+    );
   }
 
   if (structuralErrors.length > 0) {
+    writeStopHookLog({
+      sessionId,
+      decision: 'block',
+      isRetry: stopHookActive,
+      isStructured: structureResult.structured,
+      responseLengthChars: lastAssistantText.length,
+      blocksSoFar: currentBlockCount,
+      priorBlockId,
+      responseSnippet,
+      matches: ignoredTriggerMatches,
+    });
     blockAndExit(sessionId, buildStructuralBlockReason(structuralErrors), maxBlocks, {
       ...telemetryBase,
       event_type: 'structural_block',
@@ -2238,10 +2449,23 @@ function main() {
   }
 
   // Trigger matches only.
-  blockAndExit(sessionId, buildBlockReason(triggerMatches, sentenceScoresForBlock), maxBlocks, {
-    ...telemetryBase,
-    event_type: 'block',
+  writeStopHookLog({
+    sessionId,
+    decision: 'block',
+    isRetry: stopHookActive,
+    isStructured: structureResult.structured,
+    responseLengthChars: lastAssistantText.length,
+    blocksSoFar: currentBlockCount,
+    priorBlockId,
+    responseSnippet,
+    matches: [...activeTriggerMatches, ...ignoredTriggerMatches],
   });
+  blockAndExit(
+    sessionId,
+    buildBlockReason(activeTriggerMatches, sentenceScoresForBlock),
+    maxBlocks,
+    { ...telemetryBase, event_type: 'block' },
+  );
 }
 
 // =============================================================================
@@ -2393,6 +2617,7 @@ module.exports = {
   isCompactAgentSession,
   // Telemetry
   writeTelemetry,
+  writeStopHookLog,
   getLastAssistantMeta,
   TELEMETRY_DB_PATH,
   // Shadow mode

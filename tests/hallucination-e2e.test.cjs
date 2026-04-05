@@ -124,6 +124,8 @@ const E2E_SESSION_IDS = [
   'e2e-sc-2',
   'e2e-sc-3',
   'e2e-mg-1',
+  'e2e-pct-1',
+  'e2e-pct-2',
 ];
 
 beforeEach(() => {
@@ -831,5 +833,65 @@ describe('e2e: multiple config sources merged', () => {
     // "i think" is suppressed by rc allowlist; "probably" may still trigger
     // This test verifies the hook doesn't crash and returns 0
     expect(result.status).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. Per-category confidence thresholds — end-to-end via config file
+// ---------------------------------------------------------------------------
+describe('e2e: per-category confidence thresholds', () => {
+  // The per-category threshold feature affects sentence-level UNCERTAIN/HALLUCINATED labels
+  // in the block reason's sentence analysis section. It does NOT bypass trigger-phrase
+  // detection (findTriggerMatches), which runs independently. Both test cases below
+  // verify that blocking still occurs while the sentence label reflects the configured
+  // threshold.
+
+  it('speculation_language at threshold 0.99 — hook blocks and sentence label is GROUNDED', () => {
+    // With uncertain=0.99, the single-category aggregated score (≈0.088 with default weights)
+    // falls below 0.99, so scoreText labels the sentence GROUNDED — but the trigger-phrase
+    // detector still fires and the hook still blocks. The block reason reflects GROUNDED label.
+    tmpDir = makeTmpProjectDir();
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      `module.exports = {
+  categories: {
+    speculation_language: { uncertain: 0.99, hallucinated: 0.995 },
+  },
+};`,
+    );
+    // Single speculation trigger — "I think" only.
+    const transcriptPath = writeTranscript(tmpDir, 'I think this is correct.');
+    const result = runHook({ transcript_path: transcriptPath, session_id: 'e2e-pct-1' }, tmpDir);
+    expect(result.status).toBe(0);
+    // Hook still blocks — trigger-phrase detection is independent of scoring thresholds.
+    const decision = parseDecision(result.stdout);
+    expect(decision).not.toBeNull();
+    expect(decision.decision).toBe('block');
+    // The sentence-level analysis section should NOT contain [UNCERTAIN] or [HALLUCINATED]
+    // because the high per-category threshold causes scoreText to label the sentence GROUNDED.
+    expect(decision.reason).not.toMatch(/\[UNCERTAIN\]|\[HALLUCINATED\]/);
+  });
+
+  it('speculation_language at threshold 0.01 — hook blocks and sentence label is UNCERTAIN or HALLUCINATED', () => {
+    // With uncertain=0.01, the aggregated score exceeds the threshold → UNCERTAIN or HALLUCINATED.
+    // Both the trigger and the sentence label confirm the block.
+    tmpDir = makeTmpProjectDir();
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      `module.exports = {
+  categories: {
+    speculation_language: { uncertain: 0.01, hallucinated: 0.5 },
+  },
+};`,
+    );
+    const transcriptPath = writeTranscript(tmpDir, 'I think this is correct.');
+    const result = runHook({ transcript_path: transcriptPath, session_id: 'e2e-pct-2' }, tmpDir);
+    expect(result.status).toBe(0);
+    const decision = parseDecision(result.stdout);
+    expect(decision).not.toBeNull();
+    expect(decision.decision).toBe('block');
+    // The sentence-level analysis section should contain [UNCERTAIN] or [HALLUCINATED]
+    // because the low per-category threshold causes scoreText to label the sentence above GROUNDED.
+    expect(decision.reason).toMatch(/\[UNCERTAIN\]|\[HALLUCINATED\]/);
   });
 });

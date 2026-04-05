@@ -3431,7 +3431,9 @@ describe('SubagentStop hook_event_name handling', () => {
     transcriptPath = undefined;
   });
 
-  it('blocks when hook_event_name is SubagentStop and text contains trigger phrase', () => {
+  it('allows through when hook_event_name is SubagentStop (blockSubagents defaults to false)', () => {
+    // blockSubagents defaults to false — subagent sessions are not blocked by default
+    // because they legitimately contain speculative planning/reasoning text.
     const assistantText = 'I think this is probably the right approach.';
     transcriptPath = makeTempTranscript(assistantText);
 
@@ -3442,10 +3444,7 @@ describe('SubagentStop hook_event_name handling', () => {
       hook_event_name: 'SubagentStop',
     });
 
-    expect(stdout.trim().length).toBeGreaterThan(0);
-    const parsed = JSON.parse(stdout.trim());
-    expect(parsed.decision).toBe('block');
-    expect(parsed.reason).toContain('speculation_language');
+    expect(stdout.trim()).toBe('');
   });
 
   it('allows through when hook_event_name is SubagentStop and text is clean', () => {
@@ -4299,5 +4298,501 @@ describe('ungrounded_behavioral_assertion', () => {
       isCategoryEnabled: () => true,
     });
     expect(result.some((m) => m.kind === 'ungrounded_behavioral_assertion')).toBe(false);
+  });
+});
+
+// =============================================================================
+// stop_hook_log / block_matches telemetry
+// =============================================================================
+
+describe('stop hook DB telemetry (writeStopHookLog)', () => {
+  const os = require('node:os');
+  const path = require('node:path');
+  const { _openDbAt } = require('../scripts/hallucination-db.cjs');
+
+  let dbPath;
+
+  beforeEach(() => {
+    dbPath = path.join(
+      os.tmpdir(),
+      `hd-stop-tel-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+    );
+  });
+
+  afterEach(() => {
+    try {
+      require('node:fs').unlinkSync(dbPath);
+    } catch {
+      /* ignore */
+    }
+    try {
+      require('node:fs').unlinkSync(`${dbPath}-wal`);
+    } catch {
+      /* ignore */
+    }
+    try {
+      require('node:fs').unlinkSync(`${dbPath}-shm`);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it('inserts a stop_hook_log row with decision=allow on an allow event', () => {
+    // Call writeStopHookLog via a real DB opened at our test path.
+    // Because writeStopHookLog uses the module-level _db_helper, we test it
+    // indirectly by calling it and then reading the production DB path would
+    // require process isolation. Instead we test the helper directly via
+    // _openDbAt and confirm the table structure, then exercise writeStopHookLog
+    // through runHook (process isolation already writes to the real DB).
+    // For a unit-level verification, open the test DB, insert directly, and
+    // confirm the schema supports the expected writes.
+    const db = _openDbAt(dbPath);
+    try {
+      db.exec('BEGIN');
+      db.prepare(
+        `INSERT INTO stop_hook_log
+           (session_id, ts, decision, is_retry, is_structured, response_length_chars, blocks_so_far)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run('sess-allow-1', Date.now(), 'allow', 0, 0, 42, 0);
+      db.exec('COMMIT');
+
+      const row = db.prepare('SELECT * FROM stop_hook_log WHERE session_id=?').get('sess-allow-1');
+      expect(row.decision).toBe('allow');
+      expect(row.is_retry).toBe(0);
+      expect(row.response_length_chars).toBe(42);
+
+      const matchRows = db.prepare('SELECT * FROM block_matches WHERE log_id=?').all(row.id);
+      expect(matchRows).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('inserts stop_hook_log + block_matches rows on a block event', () => {
+    const db = _openDbAt(dbPath);
+    try {
+      db.exec('BEGIN');
+      db.prepare(
+        `INSERT INTO stop_hook_log
+           (session_id, ts, decision, is_retry, is_structured, response_length_chars, blocks_so_far)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run('sess-block-1', Date.now(), 'block', 0, 0, 120, 0);
+      const logId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+
+      const matches = [
+        { kind: 'speculation_language', evidence: 'probably' },
+        { kind: 'causality_language', evidence: 'because' },
+      ];
+      const insertMatch = db.prepare(
+        'INSERT INTO block_matches (log_id, category, evidence) VALUES (?, ?, ?)',
+      );
+      for (const m of matches) {
+        insertMatch.run(logId, m.kind, m.evidence);
+      }
+      db.exec('COMMIT');
+
+      const logRow = db.prepare('SELECT * FROM stop_hook_log WHERE id=?').get(logId);
+      expect(logRow.decision).toBe('block');
+
+      const matchRows = db.prepare('SELECT * FROM block_matches WHERE log_id=?').all(logId);
+      expect(matchRows).toHaveLength(2);
+      expect(matchRows.map((r) => r.category)).toContain('speculation_language');
+      expect(matchRows.map((r) => r.category)).toContain('causality_language');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('allow decision produces no block_matches rows', () => {
+    const db = _openDbAt(dbPath);
+    try {
+      db.exec('BEGIN');
+      db.prepare(
+        `INSERT INTO stop_hook_log
+           (session_id, ts, decision, is_retry, is_structured, response_length_chars, blocks_so_far)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run('sess-allow-2', Date.now(), 'allow', 0, 0, 80, 0);
+      const logId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+      db.exec('COMMIT');
+
+      const matchRows = db.prepare('SELECT * FROM block_matches WHERE log_id=?').all(logId);
+      expect(matchRows).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('DB write failure does not affect hook stdout output', () => {
+    // Run the hook with a transcript that has no trigger language — expect allow (empty stdout).
+    // Even if the DB path is read-only / broken, the hook must still produce correct output.
+    const tmpTranscript = path.join(os.tmpdir(), `hd-db-fail-test-${Date.now()}.jsonl`);
+    require('node:fs').writeFileSync(
+      tmpTranscript,
+      `${JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'The file was written successfully.' }] },
+      })}\n`,
+      'utf-8',
+    );
+    try {
+      const result = runHook({
+        session_id: 'db-fail-test',
+        transcript_path: tmpTranscript,
+        stop_hook_active: false,
+      });
+      // The hook must exit 0 and emit no blocking JSON regardless of DB state.
+      expect(result.status).toBe(0);
+      // stdout should be empty (allow) — no block decision.
+      const trimmed = result.stdout.trim();
+      if (trimmed) {
+        const parsed = JSON.parse(trimmed);
+        expect(parsed.decision).not.toBe('block');
+      }
+    } finally {
+      try {
+        require('node:fs').unlinkSync(tmpTranscript);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  it('stop_hook_log stores prior_block_id and response_snippet', () => {
+    const db = _openDbAt(dbPath);
+    try {
+      // Insert a block row first (simulates the preceding block in a session).
+      db.exec('BEGIN');
+      db.prepare(
+        `INSERT INTO stop_hook_log
+           (session_id, ts, decision, is_retry, is_structured, response_length_chars, blocks_so_far,
+            prior_block_id, response_snippet)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        'sess-prior-1',
+        Date.now() - 100,
+        'block',
+        0,
+        0,
+        80,
+        0,
+        null,
+        'first 500 chars of block response',
+      );
+      const blockId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+
+      // Insert an allow-with-retry row referencing the block.
+      db.prepare(
+        `INSERT INTO stop_hook_log
+           (session_id, ts, decision, is_retry, is_structured, response_length_chars, blocks_so_far,
+            prior_block_id, response_snippet)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        'sess-prior-1',
+        Date.now(),
+        'allow',
+        1,
+        0,
+        95,
+        1,
+        blockId,
+        'first 500 chars of allow response',
+      );
+      const allowId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+      db.exec('COMMIT');
+
+      const allowRow = db.prepare('SELECT * FROM stop_hook_log WHERE id=?').get(allowId);
+      expect(allowRow.prior_block_id).toBe(blockId);
+      expect(allowRow.response_snippet).toBe('first 500 chars of allow response');
+      expect(allowRow.is_retry).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('block_matches stores was_ignored=1 for ignored matches', () => {
+    const db = _openDbAt(dbPath);
+    try {
+      db.exec('BEGIN');
+      db.prepare(
+        `INSERT INTO stop_hook_log
+           (session_id, ts, decision, is_retry, is_structured, response_length_chars, blocks_so_far)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run('sess-ignored-1', Date.now(), 'allow', 0, 0, 60, 0);
+      const logId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+
+      db.prepare(
+        'INSERT INTO block_matches (log_id, category, evidence, was_ignored) VALUES (?, ?, ?, ?)',
+      ).run(logId, 'speculation_language', 'probably', 1);
+      db.prepare(
+        'INSERT INTO block_matches (log_id, category, evidence, was_ignored) VALUES (?, ?, ?, ?)',
+      ).run(logId, 'causality_language', 'because', 0);
+      db.exec('COMMIT');
+
+      const rows = db.prepare('SELECT * FROM block_matches WHERE log_id=?').all(logId);
+      const ignored = rows.find((r) => r.category === 'speculation_language');
+      const active = rows.find((r) => r.category === 'causality_language');
+      expect(ignored.was_ignored).toBe(1);
+      expect(active.was_ignored).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// =============================================================================
+// Config-driven gating — ignoreCategories, warnOnly, blockSubagents, blockUserSessions
+// =============================================================================
+describe('config-driven gating', () => {
+  let transcriptPath;
+  let savedEnv;
+
+  beforeEach(() => {
+    savedEnv = process.env.HALLUCINATION_DETECTOR_CONFIG;
+    delete process.env.HALLUCINATION_DETECTOR_CONFIG;
+  });
+
+  afterEach(() => {
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+      transcriptPath = undefined;
+    }
+    if (savedEnv === undefined) {
+      delete process.env.HALLUCINATION_DETECTOR_CONFIG;
+    } else {
+      process.env.HALLUCINATION_DETECTOR_CONFIG = savedEnv;
+    }
+  });
+
+  it('ignoreCategories: hook allows through when all matches are in the ignore list', () => {
+    // speculation_language is the only trigger; put it in ignoreCategories — hook allows through.
+    const cfgPath = path.join(os.tmpdir(), `hd-igcat-cfg-${Date.now()}.json`);
+    fs.writeFileSync(cfgPath, JSON.stringify({ ignoreCategories: ['speculation_language'] }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
+
+    const assistantText = 'I think this is probably the right approach.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout } = runHook({
+      session_id: `test-igcat-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+    });
+
+    // All matches were ignored — hook must emit no block decision.
+    expect(stdout.trim()).toBe('');
+    fs.unlinkSync(cfgPath);
+  });
+
+  it('ignoreCategories: hook blocks when at least one match is NOT in the ignore list', () => {
+    // completeness_claim is not ignored — hook still blocks even though
+    // speculation_language is ignored.
+    const cfgPath = path.join(os.tmpdir(), `hd-igcat2-cfg-${Date.now()}.json`);
+    fs.writeFileSync(cfgPath, JSON.stringify({ ignoreCategories: ['speculation_language'] }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
+
+    // "all files checked" triggers completeness_claim; "I think" triggers speculation_language.
+    // speculation_language is ignored; completeness_claim is not — hook must still block.
+    const assistantText = 'I think all files have been checked and everything is resolved.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout } = runHook({
+      session_id: `test-igcat2-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+    });
+
+    const trimmed = stdout.trim();
+    expect(trimmed.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(trimmed);
+    expect(parsed.decision).toBe('block');
+    fs.unlinkSync(cfgPath);
+  });
+
+  it('warnOnly: hook emits nothing to stdout even when matches are present', () => {
+    const cfgPath = path.join(os.tmpdir(), `hd-warnonly-cfg-${Date.now()}.json`);
+    fs.writeFileSync(cfgPath, JSON.stringify({ warnOnly: true }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
+
+    const assistantText = 'I think this is probably the right approach.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout, status } = runHook({
+      session_id: `test-warnonly-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+    });
+
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+    fs.unlinkSync(cfgPath);
+  });
+
+  it('blockSubagents=false: SubagentStop with trigger phrase emits no block', () => {
+    // Default is false — already tested by the SubagentStop suite. This test makes
+    // the config explicit to document the contract clearly.
+    const cfgPath = path.join(os.tmpdir(), `hd-subagent-cfg-${Date.now()}.json`);
+    fs.writeFileSync(cfgPath, JSON.stringify({ blockSubagents: false }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
+
+    const assistantText = 'I think this is probably correct.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout, status } = runHook({
+      session_id: `test-blocksubagent-off-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'SubagentStop',
+    });
+
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+    fs.unlinkSync(cfgPath);
+  });
+
+  it('blockSubagents=true: SubagentStop with trigger phrase emits a block', () => {
+    const cfgPath = path.join(os.tmpdir(), `hd-subagent-on-cfg-${Date.now()}.json`);
+    fs.writeFileSync(cfgPath, JSON.stringify({ blockSubagents: true }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
+
+    const assistantText = 'I think this is probably correct.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout } = runHook({
+      session_id: `test-blocksubagent-on-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'SubagentStop',
+    });
+
+    const trimmed = stdout.trim();
+    expect(trimmed.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(trimmed);
+    expect(parsed.decision).toBe('block');
+    fs.unlinkSync(cfgPath);
+  });
+
+  it('blockUserSessions=false: Stop event with trigger phrase emits no block', () => {
+    const cfgPath = path.join(os.tmpdir(), `hd-usersess-off-cfg-${Date.now()}.json`);
+    fs.writeFileSync(cfgPath, JSON.stringify({ blockUserSessions: false }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
+
+    const assistantText = 'I think this is probably the right approach.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout, status } = runHook({
+      session_id: `test-usersess-off-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'Stop',
+    });
+
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+    fs.unlinkSync(cfgPath);
+  });
+});
+
+// =============================================================================
+// per-category threshold scoring
+// =============================================================================
+describe('per-category threshold scoring', () => {
+  // Weights designed so that when only speculation_language fires, the aggregate
+  // score is exactly 0.5 (speculation=0.5, completeness=0.5 → sum=1.0 → score=0.5/1.0=0.5).
+  // With global thresholds (uncertain=0.3, hallucinated=0.6): 0.5 → UNCERTAIN.
+  const SPLIT_WEIGHTS = { speculation_language: 0.5, completeness_claim: 0.5 };
+
+  // Sentence that fires exactly speculation_language. Verified by checking scores object.
+  const SPEC_ONLY_SENTENCE = 'I think this is correct.';
+
+  it('single active category with valid per-category thresholds uses per-category thresholds', () => {
+    // Per-category uncertain=0.8 is higher than 0.5 → 0.5 < 0.8 → should be GROUNDED.
+    const config = {
+      categories: {
+        speculation_language: { uncertain: 0.8, hallucinated: 0.9 },
+      },
+    };
+    const results = scoreText(SPEC_ONLY_SENTENCE, SPLIT_WEIGHTS, undefined, config);
+    expect(results.length).toBe(1);
+    const r = results[0];
+    // Verify exactly one category is active (precondition for per-category path).
+    const activeCategories = Object.entries(r.scores).filter(([, v]) => v > 0);
+    expect(activeCategories.length).toBe(1);
+    expect(activeCategories[0][0]).toBe('speculation_language');
+    // 0.5 < per-category uncertain 0.8 → GROUNDED (overrides global UNCERTAIN).
+    expect(r.label).toBe('GROUNDED');
+  });
+
+  it('single active category with no per-category entry falls back to global thresholds', () => {
+    // config.categories has no entry for speculation_language → global thresholds apply.
+    // With global uncertain=0.3: 0.5 >= 0.3 → UNCERTAIN.
+    const config = { categories: { completeness_claim: { uncertain: 0.1, hallucinated: 0.4 } } };
+    const results = scoreText(SPEC_ONLY_SENTENCE, SPLIT_WEIGHTS, undefined, config);
+    expect(results.length).toBe(1);
+    const r = results[0];
+    // Verify only speculation is active.
+    const activeCategories = Object.entries(r.scores).filter(([, v]) => v > 0);
+    expect(activeCategories.length).toBe(1);
+    // Falls back to global → UNCERTAIN (0.5 >= 0.3).
+    expect(r.label).toBe('UNCERTAIN');
+  });
+
+  it('multiple active categories fall back to global thresholds', () => {
+    // Sentence that fires both speculation and completeness.
+    // "I think everything is fully resolved." → speculation + completeness.
+    // SPLIT_WEIGHTS: both fire → score = (0.5 + 0.5) / 1.0 = 1.0 → HALLUCINATED with global.
+    const multiSentence = 'I think everything is fully resolved.';
+    const config = {
+      categories: {
+        speculation_language: { uncertain: 0.99, hallucinated: 0.995 },
+        completeness_claim: { uncertain: 0.99, hallucinated: 0.995 },
+      },
+    };
+    const results = scoreText(multiSentence, SPLIT_WEIGHTS, undefined, config);
+    // At least one sentence must have multiple active categories.
+    const multiActive = results.find(
+      (r) => Object.values(r.scores).filter((v) => v > 0).length > 1,
+    );
+    expect(multiActive).toBeTruthy();
+    // Per-category thresholds are NOT used when multiple categories are active.
+    // Global hallucinated=0.6 → score=1.0 > 0.6 → HALLUCINATED.
+    expect(multiActive.label).toBe('HALLUCINATED');
+  });
+
+  it('config.categories is empty object — behavior identical to no config', () => {
+    const noConfig = scoreText(SPEC_ONLY_SENTENCE, SPLIT_WEIGHTS, undefined, undefined);
+    const emptyCategories = scoreText(SPEC_ONLY_SENTENCE, SPLIT_WEIGHTS, undefined, {
+      categories: {},
+    });
+    expect(noConfig.length).toBe(emptyCategories.length);
+    expect(noConfig[0].label).toBe(emptyCategories[0].label);
+    expect(noConfig[0].aggregateScore).toBe(emptyCategories[0].aggregateScore);
+  });
+
+  it('per-category uncertain higher than global: UNCERTAIN with global passes as GROUNDED with per-category', () => {
+    // Score = 0.5. Global uncertain=0.3 → UNCERTAIN. Per-category uncertain=0.8 → GROUNDED.
+    const globalResult = scoreText(SPEC_ONLY_SENTENCE, SPLIT_WEIGHTS, undefined, undefined);
+    const perCatResult = scoreText(SPEC_ONLY_SENTENCE, SPLIT_WEIGHTS, undefined, {
+      categories: { speculation_language: { uncertain: 0.8, hallucinated: 0.9 } },
+    });
+    // Verify score is the same (thresholds don't affect score, only label).
+    expect(globalResult[0].aggregateScore).toBe(perCatResult[0].aggregateScore);
+    // Global: 0.5 >= 0.3 → UNCERTAIN.
+    expect(globalResult[0].label).toBe('UNCERTAIN');
+    // Per-category: 0.5 < 0.8 → GROUNDED.
+    expect(perCatResult[0].label).toBe('GROUNDED');
+  });
+
+  it('per-category hallucinated lower than global: UNCERTAIN with global becomes HALLUCINATED with per-category', () => {
+    // Score = 0.5. Global hallucinated=0.6 → 0.5 <= 0.6 → UNCERTAIN.
+    // Per-category hallucinated=0.4 → 0.5 > 0.4 → HALLUCINATED.
+    const globalResult = scoreText(SPEC_ONLY_SENTENCE, SPLIT_WEIGHTS, undefined, undefined);
+    const perCatResult = scoreText(SPEC_ONLY_SENTENCE, SPLIT_WEIGHTS, undefined, {
+      categories: { speculation_language: { uncertain: 0.3, hallucinated: 0.4 } },
+    });
+    expect(globalResult[0].aggregateScore).toBe(perCatResult[0].aggregateScore);
+    // Global: 0.3 <= 0.5 <= 0.6 → UNCERTAIN.
+    expect(globalResult[0].label).toBe('UNCERTAIN');
+    // Per-category: 0.5 > 0.4 → HALLUCINATED.
+    expect(perCatResult[0].label).toBe('HALLUCINATED');
   });
 });

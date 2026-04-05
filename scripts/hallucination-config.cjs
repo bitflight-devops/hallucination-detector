@@ -76,6 +76,11 @@ const DEFAULT_CONFIG = {
   responseTemplates: {},
   includeContext: true,
   contextLines: 2,
+  // Session-type gating
+  warnOnly: false, // log telemetry but never emit a block to stdout
+  ignoreCategories: [], // category names skipped entirely (still written to telemetry with was_ignored=1)
+  blockSubagents: false, // block when hook_event_name is SubagentStop
+  blockUserSessions: true, // block when hook_event_name is Stop (user-facing session)
 };
 
 // ============================================================================
@@ -295,6 +300,19 @@ function isValidThresholds(t) {
 }
 
 /**
+ * Returns true when `value` is a valid per-category threshold pair: a non-null
+ * plain object with both `uncertain` and `hallucinated` as finite numbers in
+ * [0,1] and `uncertain <= hallucinated`.  Delegates to `isValidThresholds`
+ * because the shapes are identical.
+ *
+ * @param {*} value - Value to check.
+ * @returns {boolean}
+ */
+function isValidCategoryThreshold(value) {
+  return isValidThresholds(value);
+}
+
+/**
  * Validate a raw config object loaded from a source, logging warnings to stderr
  * for invalid field values and deleting them so they fall back to defaults during
  * the merge step.  Mutates the provided object in place.
@@ -351,6 +369,24 @@ function validateConfig(obj, source) {
     warn('dryRun', obj.dryRun, false);
     delete obj.dryRun;
   }
+  if ('warnOnly' in obj && typeof obj.warnOnly !== 'boolean') {
+    warn('warnOnly', obj.warnOnly, false);
+    delete obj.warnOnly;
+  }
+  if ('blockSubagents' in obj && typeof obj.blockSubagents !== 'boolean') {
+    warn('blockSubagents', obj.blockSubagents, false);
+    delete obj.blockSubagents;
+  }
+  if ('blockUserSessions' in obj && typeof obj.blockUserSessions !== 'boolean') {
+    warn('blockUserSessions', obj.blockUserSessions, true);
+    delete obj.blockUserSessions;
+  }
+  if ('ignoreCategories' in obj) {
+    if (!Array.isArray(obj.ignoreCategories)) {
+      warn('ignoreCategories', obj.ignoreCategories, []);
+      delete obj.ignoreCategories;
+    }
+  }
   if ('includeContext' in obj && typeof obj.includeContext !== 'boolean') {
     warn('includeContext', obj.includeContext, true);
     delete obj.includeContext;
@@ -373,6 +409,54 @@ function validateConfig(obj, source) {
     if (!isValidThresholds(obj.thresholds)) {
       warn('thresholds', JSON.stringify(obj.thresholds), DEFAULT_THRESHOLDS);
       delete obj.thresholds;
+    }
+  }
+  // categories: per-category overrides — validate threshold pairs when present.
+  // Unknown category names are preserved with a warning (they may be user-defined
+  // or from a future version). Invalid threshold fields are deleted so they fall
+  // back to global thresholds; other category fields (enabled, customPatterns,
+  // replacePatterns) are always preserved.
+  if ('categories' in obj) {
+    if (
+      typeof obj.categories !== 'object' ||
+      obj.categories === null ||
+      Array.isArray(obj.categories)
+    ) {
+      process.stderr.write(
+        `[hallucination-detector] Invalid categories value from ${src}; must be a plain object. Using default {}\n`,
+      );
+      delete obj.categories;
+    } else {
+      const VALID_CATEGORIES = new Set(Object.keys(DEFAULT_WEIGHTS));
+      for (const catName of Object.keys(obj.categories)) {
+        if (!VALID_CATEGORIES.has(catName)) {
+          process.stderr.write(
+            `[hallucination-detector] Unknown category name "${catName}" from ${src}; entry preserved but may have no effect\n`,
+          );
+        }
+        const catEntry = obj.categories[catName];
+        if (catEntry === null || typeof catEntry !== 'object' || Array.isArray(catEntry)) {
+          continue;
+        }
+        const hasUncertain = 'uncertain' in catEntry;
+        const hasHallucinated = 'hallucinated' in catEntry;
+        if (hasUncertain || hasHallucinated) {
+          // Only validate when at least one threshold field is present.
+          // Both fields must be present and valid together.
+          if (
+            !isValidCategoryThreshold({
+              uncertain: catEntry.uncertain,
+              hallucinated: catEntry.hallucinated,
+            })
+          ) {
+            process.stderr.write(
+              `[hallucination-detector] Invalid threshold pair for category "${catName}" from ${src} (uncertain=${catEntry.uncertain}, hallucinated=${catEntry.hallucinated}); threshold fields removed, other category fields preserved\n`,
+            );
+            delete catEntry.uncertain;
+            delete catEntry.hallucinated;
+          }
+        }
+      }
     }
   }
   return obj;
@@ -555,16 +639,35 @@ function loadPyprojectConfig(filePath) {
 // ============================================================================
 
 /**
+ * Return the resolved path to the project-level config file, or null when
+ * `CLAUDE_PROJECT_DIR` is unset or empty.
+ *
+ * The project-level config lives at `$CLAUDE_PROJECT_DIR/.hd/config.json` and
+ * is the new highest-priority source below the explicit env-var override.
+ *
+ * Exported for testing.
+ *
+ * @returns {string|null}
+ */
+function getProjectConfigPath() {
+  const projectDir = process.env.CLAUDE_PROJECT_DIR;
+  if (!projectDir || typeof projectDir !== 'string' || !projectDir.trim()) return null;
+  return path.join(projectDir, '.hd', 'config.json');
+}
+
+/**
  * Load and validate the full configuration using a cascading source chain.
  * Returns a deeply-frozen config object.
  *
  * Sources (highest priority first):
  *   1. `HALLUCINATION_DETECTOR_CONFIG` env var → file path
- *   2. `.hallucination-detectorrc.cjs` in `process.cwd()`
- *   3. `project.json` → `hallucination-detector` key
- *   4. `pyproject.toml` → `[tool.hallucination-detector]` section
- *   5. `~/.hallucination-detectorrc.cjs`
- *   6. Built-in defaults
+ *   2. `$CLAUDE_PROJECT_DIR/.hd/config.json` (project-level override)
+ *   3. `.hallucination-detectorrc.cjs` in `process.cwd()`
+ *   4. `project.json` → `hallucination-detector` key
+ *   5. `pyproject.toml` → `[tool.hallucination-detector]` section
+ *   6. `~/.hd/config.json` (global user config)
+ *   7. `~/.hallucination-detectorrc.cjs`
+ *   8. Built-in defaults
  *
  * @param {object} [_opts]              - Internal options (used by tests only).
  * @param {string} [_opts._homeDir]     - Override home directory path.
@@ -578,28 +681,43 @@ function loadConfig(_opts) {
   // We merge them into the defaults in this order so the last write wins.
   const sources = [];
 
-  // Priority 5: ~/.hallucination-detectorrc.cjs
+  // Priority 7: ~/.hallucination-detectorrc.cjs
   const homeRc = loadCjsFile(path.join(homeDir, '.hallucination-detectorrc.cjs'));
   if (homeRc && typeof homeRc === 'object') {
     sources.push(validateConfig({ ...homeRc }, '~/.hallucination-detectorrc.cjs'));
   }
 
-  // Priority 4: pyproject.toml → [tool.hallucination-detector]
+  // Priority 6: ~/.hd/config.json (global user config)
+  const globalHdConfig = loadJsonFile(path.join(homeDir, '.hd', 'config.json'));
+  if (globalHdConfig && typeof globalHdConfig === 'object') {
+    sources.push(validateConfig({ ...globalHdConfig }, '~/.hd/config.json'));
+  }
+
+  // Priority 5: pyproject.toml → [tool.hallucination-detector]
   const pyprojectCfg = loadPyprojectConfig(path.join(cwd, 'pyproject.toml'));
   if (pyprojectCfg) {
     sources.push(validateConfig({ ...pyprojectCfg }, 'pyproject.toml'));
   }
 
-  // Priority 3: project.json → hallucination-detector key
+  // Priority 4: project.json → hallucination-detector key
   const projectJsonCfg = loadProjectJsonConfig(path.join(cwd, 'project.json'));
   if (projectJsonCfg) {
     sources.push(validateConfig({ ...projectJsonCfg }, 'project.json'));
   }
 
-  // Priority 2: .hallucination-detectorrc.cjs in cwd
+  // Priority 3: .hallucination-detectorrc.cjs in cwd
   const cwdRc = loadCjsFile(path.join(cwd, '.hallucination-detectorrc.cjs'));
   if (cwdRc && typeof cwdRc === 'object') {
     sources.push(validateConfig({ ...cwdRc }, '.hallucination-detectorrc.cjs'));
+  }
+
+  // Priority 2: $CLAUDE_PROJECT_DIR/.hd/config.json (project-level override)
+  const projectCfgPath = getProjectConfigPath();
+  if (projectCfgPath) {
+    const projectCfg = loadJsonFile(projectCfgPath);
+    if (projectCfg && typeof projectCfg === 'object') {
+      sources.push(validateConfig({ ...projectCfg }, '$CLAUDE_PROJECT_DIR/.hd/config.json'));
+    }
   }
 
   // Priority 1: HALLUCINATION_DETECTOR_CONFIG env var
@@ -662,6 +780,8 @@ module.exports = {
   loadWeights,
   mergeConfig,
   isValidThresholds,
+  isValidCategoryThreshold,
+  getProjectConfigPath,
   DEFAULT_WEIGHTS,
   DEFAULT_THRESHOLDS,
   DEFAULT_CONFIG,
