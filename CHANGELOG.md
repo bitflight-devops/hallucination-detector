@@ -1,3 +1,18 @@
+## [1.13.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.4...v1.13.0) (2026-04-05)
+
+### Features
+
+- **detection:** Phase 3 — observation expression templates + structural validator ([866c3f0](https://github.com/bitflight-devops/hallucination-detector/commit/866c3f062f942b3645dc5e53ef64b11292f90d70))
+- **detection:** Phase 4 — shadow mode + incremental audit service ([7339268](https://github.com/bitflight-devops/hallucination-detector/commit/7339268123f3b973d0d38643c700e561ac373f7f))
+- **telemetry:** log hook events with cost to ~/.hd/telemetry/hallucination-detector.db ([5949eb2](https://github.com/bitflight-devops/hallucination-detector/commit/5949eb257a657b77e60d58f01c516b99c18022cf))
+
+### Bug Fixes
+
+- **detection:** exempt compact agents and fix fail-open loop counter ([37100c0](https://github.com/bitflight-devops/hallucination-detector/commit/37100c0d7e4d61e8cd93d3bcc32a15b528fae3a6))
+- **detection:** sentence-scoped code-reference suppression for causality (A1) ([b3cf575](https://github.com/bitflight-devops/hallucination-detector/commit/b3cf5752e20db4c3aaa777c2941a55e5d893efc8))
+- **detection:** strip tilde fences in stripLowSignalRegions (A2) ([a25250a](https://github.com/bitflight-devops/hallucination-detector/commit/a25250aeacb8805d83018bcb399afa89fef0a356))
+- **hooks:** timeouts, compact exemption, SubagentStop, telemetry enrichment ([09723b6](https://github.com/bitflight-devops/hallucination-detector/commit/09723b6b5eb7199502e421d5ab964940e29f4f5a))
+
 ## [1.12.4](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.3...v1.12.4) (2026-03-18)
 
 ### Bug Fixes
