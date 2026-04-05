@@ -1,3 +1,9 @@
+## [1.14.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.13.1...v1.14.0) (2026-04-05)
+
+### Features
+
+- **detection:** add unsupported_absence trigger category ([#56](https://github.com/bitflight-devops/hallucination-detector/issues/56)) ([3bed4c8](https://github.com/bitflight-devops/hallucination-detector/commit/3bed4c86910cae77198fe28468a53a1fdc4e2f41))
+
 ## [1.13.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.13.0...v1.13.1) (2026-04-05)
 
 ### Bug Fixes
