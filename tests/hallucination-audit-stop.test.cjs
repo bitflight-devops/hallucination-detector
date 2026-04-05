@@ -791,6 +791,7 @@ describe('aggregateWeightedScore', () => {
       evaluative_design_claim: 1,
       internal_contradiction: 1,
       unsupported_absence: 1,
+      ungrounded_behavioral_assertion: 1,
     };
     expect(aggregateWeightedScore(scores, DEFAULT_WEIGHTS)).toBe(1);
   });
@@ -805,10 +806,10 @@ describe('aggregateWeightedScore', () => {
       internal_contradiction: 0,
       unsupported_absence: 0,
     };
-    // speculation weight = 0.25, weightSum = 2.35 (unsupported_absence: 0.7 added)
-    // result = 0.25 / 2.35 ≈ 0.10638
+    // speculation weight = 0.25, weightSum = 2.85 (ungrounded_behavioral_assertion: 0.5 added)
+    // result = 0.25 / 2.85 ≈ 0.08772
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    const expected = 0.25 / 2.35;
+    const expected = 0.25 / 2.85;
     expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
@@ -822,8 +823,8 @@ describe('aggregateWeightedScore', () => {
   it('handles missing score keys as 0', () => {
     const scores = { speculation_language: 1 };
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    // Only speculation fires: 0.25 / 2.35 ≈ 0.10638 (weightSum = 2.35 with unsupported_absence: 0.7)
-    const expected = 0.25 / 2.35;
+    // Only speculation fires: 0.25 / 2.85 ≈ 0.08772 (weightSum = 2.85 with ungrounded_behavioral_assertion: 0.5)
+    const expected = 0.25 / 2.85;
     expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
@@ -916,7 +917,7 @@ describe('scoreText', () => {
   });
 
   it('causal sentence gets GROUNDED label', () => {
-    // causality_language weight = 0.30, weightSum = 2.35 → score = 0.30/2.35 ≈ 0.128 → GROUNDED
+    // causality_language weight = 0.30, weightSum = 2.85 → score = 0.30/2.85 ≈ 0.105 → GROUNDED
     const results = scoreText('The test breaks because the config value is wrong.');
     const causalResult = results.find((r) => r.scores.causality_language === 1);
     expect(causalResult).toBeTruthy();
@@ -924,8 +925,10 @@ describe('scoreText', () => {
   });
 
   it('highly flagged sentence gets UNCERTAIN or HALLUCINATED label', () => {
-    // speculation (0.25) + causality (0.30) + completeness (0.20) = 0.75 / 1.65 ≈ 0.455 → UNCERTAIN
-    const results = scoreText('I think everything is fixed because of the change.');
+    // speculation (0.25) + evaluative (0.40) + causality (0.30) + completeness (0.20) = 1.15 / 2.85 ≈ 0.404 → UNCERTAIN
+    const results = scoreText(
+      'I think the cleanest solution is fully resolved because of the change.',
+    );
     const flagged = results.find((r) => r.aggregateScore > 0.3);
     expect(flagged).toBeTruthy();
     expect(['UNCERTAIN', 'HALLUCINATED']).toContain(flagged.label);
@@ -1208,7 +1211,7 @@ describe('block reason self-trigger regression', () => {
 // DEFAULT_WEIGHTS
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
-  it('contains all seven detection categories including evaluative_design_claim, internal_contradiction, and unsupported_absence', () => {
+  it('contains all eight detection categories including evaluative_design_claim, internal_contradiction, unsupported_absence, and ungrounded_behavioral_assertion', () => {
     expect(DEFAULT_WEIGHTS).toHaveProperty('speculation_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('causality_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('pseudo_quantification');
@@ -1216,8 +1219,9 @@ describe('DEFAULT_WEIGHTS', () => {
     expect(DEFAULT_WEIGHTS).toHaveProperty('evaluative_design_claim');
     expect(DEFAULT_WEIGHTS).toHaveProperty('internal_contradiction');
     expect(DEFAULT_WEIGHTS).toHaveProperty('unsupported_absence');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('ungrounded_behavioral_assertion');
     expect(DEFAULT_WEIGHTS).not.toHaveProperty('fabricated_source');
-    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(7);
+    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(8);
   });
 
   it('evaluative_design_claim weight is 0.4', () => {
@@ -4206,5 +4210,94 @@ describe('unsupported_absence', () => {
       expect(parsed.decision).toBe('block');
       expect(parsed.reason).toContain('unsupported_absence');
     });
+  });
+});
+
+// =============================================================================
+// ungrounded_behavioral_assertion — full detection suite
+// =============================================================================
+describe('ungrounded_behavioral_assertion', () => {
+  // ---------------------------------------------------------------------------
+  // Positive — phrases that must trigger
+  // ---------------------------------------------------------------------------
+  it("flags 'it works' without evidence nearby", () => {
+    const matches = findTriggerMatches('The migration ran and it works now.');
+    const kinds = matches.filter((m) => m.kind === 'ungrounded_behavioral_assertion');
+    expect(kinds.length).toBeGreaterThan(0);
+    expect(kinds[0].evidence).toMatch(/it works/i);
+  });
+
+  it("flags 'fixed', 'resolved', 'done' without evidence nearby", () => {
+    const textFixed = findTriggerMatches('The bug is fixed.');
+    expect(
+      textFixed.filter((m) => m.kind === 'ungrounded_behavioral_assertion').length,
+    ).toBeGreaterThan(0);
+
+    const textResolved = findTriggerMatches('The issue is resolved.');
+    expect(
+      textResolved.filter((m) => m.kind === 'ungrounded_behavioral_assertion').length,
+    ).toBeGreaterThan(0);
+
+    const textDone = findTriggerMatches('Done.');
+    expect(
+      textDone.filter((m) => m.kind === 'ungrounded_behavioral_assertion').length,
+    ).toBeGreaterThan(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Negative — evidence nearby suppresses
+  // ---------------------------------------------------------------------------
+  it('does not flag "it works" when evidence phrase is within 150 chars', () => {
+    const matches = findTriggerMatches(
+      'it works — File: scripts/hallucination-audit-stop.cjs confirmed output',
+    );
+    const kinds = matches.filter((m) => m.kind === 'ungrounded_behavioral_assertion');
+    expect(kinds).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Negative — question suppression
+  // ---------------------------------------------------------------------------
+  it('does not flag "is working" inside a question sentence', () => {
+    const matches = findTriggerMatches('Is the pipeline is working?');
+    const kinds = matches.filter((m) => m.kind === 'ungrounded_behavioral_assertion');
+    expect(kinds).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Negative — hasValidTemplate suppresses entire block
+  // ---------------------------------------------------------------------------
+  it('does not flag "it works" when _hasValidTemplate is true', () => {
+    const matches = findTriggerMatches('The deployment it works fine.', {
+      _hasValidTemplate: true,
+    });
+    const kinds = matches.filter((m) => m.kind === 'ungrounded_behavioral_assertion');
+    expect(kinds).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Negative — category disabled suppresses
+  // ---------------------------------------------------------------------------
+  it('does not flag when category is disabled via config', () => {
+    const matches = findTriggerMatches('It works and is resolved.', {
+      categories: { ungrounded_behavioral_assertion: { enabled: false } },
+    });
+    const kinds = matches.filter((m) => m.kind === 'ungrounded_behavioral_assertion');
+    expect(kinds).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Negative — claim label collision guard
+  // ---------------------------------------------------------------------------
+  it('does not fire when match is preceded by opening bracket (claim label context)', () => {
+    const result = findTriggerMatches('[done] task completed', { isCategoryEnabled: () => true });
+    expect(result.some((m) => m.kind === 'ungrounded_behavioral_assertion')).toBe(false);
+  });
+
+  it('does not fire when match is followed by "claims" (claim structure context)', () => {
+    const result = findTriggerMatches('fixed claims require evidence', {
+      isCategoryEnabled: () => true,
+    });
+    expect(result.some((m) => m.kind === 'ungrounded_behavioral_assertion')).toBe(false);
   });
 });

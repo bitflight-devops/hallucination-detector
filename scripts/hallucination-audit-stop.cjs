@@ -581,11 +581,14 @@ const LIST_ITEM_RE = /^\s*(?:\d+[.)]\s|\*\s|-\s)/gm;
 const ABSENCE_CLAIM_RE =
   /\b(?:there\s+is\s+no|there\s+are\s+no|no\s+such|doesn't\s+exist|does\s+not\s+exist|cannot\s+be\s+found|couldn't\s+find|can't\s+find|is\s+missing|absence\s+of|no\s+config|no\s+file|no\s+function|no\s+method)\b/gi;
 
-// Matches bare behavioral outcome assertions: "it works", "is working", "verified", "confirmed",
-// "fixed", "resolved", "done" — without supporting tool output or evidence nearby.
+// Matches bare behavioral outcome assertions: "it works", "is working", "fixed", "resolved",
+// "done" — without supporting tool output or evidence nearby.
+// "verified" and "confirmed" are excluded: they are claim label names in this codebase
+// (e.g., "VERIFIED claim [c1]") and appear in the hook's own block-reason text, making
+// them unresolvable in the self-trigger invariant.
 // Used by block 8 (ungrounded_behavioral_assertion). The `g` flag is required for matchAll().
 const BEHAVIORAL_ASSERTION_RE =
-  /\b(?:it\s+works?|is\s+working|verified|confirmed|fixed|resolved|done)\b/gi;
+  /\b(?:it\s+works?|is\s+working(?!\s+on\b)|fixed(?!-)|resolved|done)\b/gi;
 
 // Uncertainty markers — phrases that signal the assistant is explicitly disclosing
 // what it does NOT know. When a speculation phrase appears near these markers,
@@ -1007,7 +1010,7 @@ function hasToolUseInRecentEntries(entries, recentTurns = 2) {
  *   - `config.categories.<name>.replacePatterns` — when `true`, customPatterns replaces built-ins.
  *   - `config.allowlist` — array of strings/RegExps; any match whose evidence satisfies an entry is dropped.
  *   - `config.maxTriggersPerResponse` — upper bound on the number of returned matches.
- * @returns {Array<{kind: string, evidence: string}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, `evaluative_design_claim`, `internal_contradiction`, `unsupported_absence`, or `ungrounded_behavioral_assertion`, and `evidence` is the matched snippet from the text.
+ * @returns {Array<{kind: string, evidence: string}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, `evaluative_design_claim`, `internal_contradiction`, `unsupported_absence`, or `ungrounded_behavioral_assertion` (bare outcome claims: "it works", "fixed", "resolved", "done" without supporting evidence), and `evidence` is the matched snippet from the text.
  */
 function findTriggerMatches(text, config = {}) {
   const rawMatches = [];
