@@ -3,12 +3,14 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 
 const {
   findNewSessionFiles,
   parseBlockEvents,
-  updateAuditState,
-  defaultAuditState,
+  DB_PATH,
+  openDb,
+  _openDbAt,
   MAX_FILE_SIZE_BYTES,
 } = require('../scripts/hallucination-audit-incremental.cjs');
 
@@ -207,107 +209,258 @@ describe('parseBlockEvents', () => {
 });
 
 // =============================================================================
-// updateAuditState
+// openDb / _openDbAt
 // =============================================================================
-describe('updateAuditState', () => {
-  it('increments totals correctly', () => {
-    const state = defaultAuditState();
-    updateAuditState(state, {
-      filesScanned: 3,
-      newBlocks: 5,
-      categories: ['speculation_language', 'causality_language'],
-      durationMs: 42,
-    });
+describe('openDb / _openDbAt', () => {
+  let tmpDir;
+  let tmpDbPath;
 
-    expect(state.totals.sessions_scanned).toBe(3);
-    expect(state.totals.blocks_total).toBe(5);
-    expect(state.totals.by_category.speculation_language).toBe(1);
-    expect(state.totals.by_category.causality_language).toBe(1);
+  beforeEach(() => {
+    tmpDir = path.join(
+      os.tmpdir(),
+      `hd-sqlite-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    tmpDbPath = path.join(tmpDir, 'test.db');
   });
 
-  it('appends to runs array', () => {
-    const state = defaultAuditState();
-    updateAuditState(state, {
-      filesScanned: 1,
-      newBlocks: 2,
-      categories: [],
-      durationMs: 10,
-    });
-
-    expect(state.runs.length).toBe(1);
-    expect(state.runs[0].files_scanned).toBe(1);
-    expect(state.runs[0].new_blocks).toBe(2);
-    expect(state.runs[0].duration_ms).toBe(10);
-    expect(typeof state.runs[0].ts).toBe('number');
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('accumulates across multiple calls', () => {
-    const state = defaultAuditState();
-    updateAuditState(state, {
-      filesScanned: 2,
-      newBlocks: 3,
-      categories: ['speculation_language'],
-      durationMs: 20,
-    });
-    updateAuditState(state, {
-      filesScanned: 1,
-      newBlocks: 4,
-      categories: ['speculation_language', 'causality_language'],
-      durationMs: 15,
-    });
+  it('creates the directory and returns a DatabaseSync instance', () => {
+    const db = _openDbAt(tmpDbPath);
+    expect(db).not.toBeNull();
+    expect(fs.existsSync(tmpDbPath)).toBe(true);
+    db.close();
+  });
 
-    expect(state.totals.sessions_scanned).toBe(3);
-    expect(state.totals.blocks_total).toBe(7);
-    expect(state.totals.by_category.speculation_language).toBe(2);
-    expect(state.totals.by_category.causality_language).toBe(1);
-    expect(state.runs.length).toBe(2);
+  it('creates runs table', () => {
+    const db = _openDbAt(tmpDbPath);
+    const row = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='runs'")
+      .get();
+    expect(row?.name).toBe('runs');
+    db.close();
+  });
+
+  it('creates block_categories table', () => {
+    const db = _openDbAt(tmpDbPath);
+    const row = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='block_categories'")
+      .get();
+    expect(row?.name).toBe('block_categories');
+    db.close();
+  });
+
+  it('sets WAL journal mode', () => {
+    const db = _openDbAt(tmpDbPath);
+    const row = db.prepare('PRAGMA journal_mode').get();
+    expect(row?.journal_mode).toBe('wal');
+    db.close();
+  });
+
+  it('returns null for an invalid path', () => {
+    // Pass a path inside a file (not a directory) to force an error
+    const filePath = path.join(os.tmpdir(), `hd-not-a-dir-${Date.now()}`);
+    fs.writeFileSync(filePath, 'x');
+    const db = _openDbAt(path.join(filePath, 'sub', 'test.db'));
+    expect(db).toBeNull();
+    fs.rmSync(filePath);
   });
 });
 
 // =============================================================================
-// Full integration: empty state → process JSONL with 2 block events → totals = 2
+// last_run derived from MAX(ts)
 // =============================================================================
-describe('full integration', () => {
+describe('last_run derived from MAX(ts)', () => {
   let tmpDir;
+  let tmpDbPath;
 
-  afterEach(() => {
-    if (tmpDir) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-      tmpDir = null;
-    }
+  beforeEach(() => {
+    tmpDir = path.join(
+      os.tmpdir(),
+      `hd-sqlite-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    tmpDbPath = path.join(tmpDir, 'test.db');
   });
 
-  it('empty state → 2 block events in JSONL → state.totals.blocks_total = 2', () => {
-    tmpDir = makeTempDir();
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns 0 when runs table is empty', () => {
+    const db = _openDbAt(tmpDbPath);
+    const row = db.prepare('SELECT COALESCE(MAX(ts), 0) AS last_run FROM runs').get();
+    expect(row.last_run).toBe(0);
+    db.close();
+  });
+
+  it('returns the max ts after inserts', () => {
+    const db = _openDbAt(tmpDbPath);
+    db.prepare(
+      'INSERT INTO runs (ts, files_scanned, new_blocks, duration_ms) VALUES (?, ?, ?, ?)',
+    ).run(1000, 1, 0, 10);
+    db.prepare(
+      'INSERT INTO runs (ts, files_scanned, new_blocks, duration_ms) VALUES (?, ?, ?, ?)',
+    ).run(5000, 2, 3, 20);
+    const row = db.prepare('SELECT COALESCE(MAX(ts), 0) AS last_run FROM runs').get();
+    expect(row.last_run).toBe(5000);
+    db.close();
+  });
+});
+
+// =============================================================================
+// runs and block_categories inserts
+// =============================================================================
+describe('runs and block_categories inserts', () => {
+  let tmpDir;
+  let tmpDbPath;
+
+  beforeEach(() => {
+    tmpDir = path.join(
+      os.tmpdir(),
+      `hd-sqlite-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    tmpDbPath = path.join(tmpDir, 'test.db');
+  });
+
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('inserts a run row with correct fields', () => {
+    const db = _openDbAt(tmpDbPath);
+    const ts = Date.now();
+    db.prepare(
+      'INSERT INTO runs (ts, files_scanned, new_blocks, duration_ms) VALUES (?, ?, ?, ?)',
+    ).run(ts, 3, 5, 42);
+    const row = db.prepare('SELECT * FROM runs').get();
+    expect(row.ts).toBe(ts);
+    expect(row.files_scanned).toBe(3);
+    expect(row.new_blocks).toBe(5);
+    expect(row.duration_ms).toBe(42);
+    db.close();
+  });
+
+  it('inserts block_category rows linked to run_id', () => {
+    const db = _openDbAt(tmpDbPath);
+    db.prepare(
+      'INSERT INTO runs (ts, files_scanned, new_blocks, duration_ms) VALUES (?, ?, ?, ?)',
+    ).run(Date.now(), 1, 2, 10);
+    const runId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+    db.prepare('INSERT INTO block_categories (run_id, category, count) VALUES (?, ?, ?)').run(
+      runId,
+      'speculation_language',
+      2,
+    );
+    db.prepare('INSERT INTO block_categories (run_id, category, count) VALUES (?, ?, ?)').run(
+      runId,
+      'causality_language',
+      1,
+    );
+    const cats = db.prepare('SELECT * FROM block_categories ORDER BY category').all();
+    expect(cats.length).toBe(2);
+    expect(cats[0].category).toBe('causality_language');
+    expect(cats[0].run_id).toBe(runId);
+    expect(cats[1].category).toBe('speculation_language');
+    expect(cats[1].count).toBe(2);
+    db.close();
+  });
+});
+
+// =============================================================================
+// Full integration (SQLite)
+// =============================================================================
+describe('full integration (SQLite)', () => {
+  let tmpSessionDir;
+  let tmpDbDir;
+  let tmpDbPath;
+
+  beforeEach(() => {
+    tmpSessionDir = path.join(
+      os.tmpdir(),
+      `hd-int-sessions-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    fs.mkdirSync(tmpSessionDir, { recursive: true });
+    tmpDbDir = path.join(
+      os.tmpdir(),
+      `hd-int-db-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    tmpDbPath = path.join(tmpDbDir, 'test.db');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpSessionDir, { recursive: true, force: true });
+    fs.rmSync(tmpDbDir, { recursive: true, force: true });
+  });
+
+  it('empty db → 2 block events in JSONL → runs.new_blocks = 2', () => {
     const beforeTs = Date.now() - 5000;
 
     // Write a session file with 2 block events
-    const sessionFile = writeTempJsonl(tmpDir, 'session-with-blocks.jsonl', [
-      ...blockLines(['speculation_language']),
-      ...blockLines(['causality_language']),
-    ]);
+    const headerLine = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: '⚠️ Hallucination detector blocked this response.' }],
+      },
+    });
+    const sessionLines = [
+      headerLine,
+      '- speculation_language: `evidence`',
+      headerLine,
+      '- causality_language: `evidence`',
+    ];
+    const sessionFile = path.join(tmpSessionDir, 'session.jsonl');
+    fs.writeFileSync(sessionFile, `${sessionLines.join('\n')}\n`, 'utf-8');
 
-    // Verify file was found
-    const newFiles = findNewSessionFiles(tmpDir, beforeTs);
+    // Verify file discovery works
+    const newFiles = findNewSessionFiles(tmpSessionDir, beforeTs);
     expect(newFiles).toContain(sessionFile);
 
-    // Parse block events from the file
-    const { count, categories } = parseBlockEvents(sessionFile);
-    expect(count).toBe(2);
+    // Open DB and confirm it starts empty
+    const db = _openDbAt(tmpDbPath);
+    expect(db).not.toBeNull();
 
-    // Update state
-    const state = defaultAuditState();
-    const startMs = Date.now();
-    updateAuditState(state, {
-      filesScanned: newFiles.length,
-      newBlocks: count,
-      categories,
-      durationMs: Date.now() - startMs,
-    });
+    const lastRunRow = db.prepare('SELECT COALESCE(MAX(ts), 0) AS last_run FROM runs').get();
+    expect(lastRunRow.last_run).toBe(0);
 
-    expect(state.totals.blocks_total).toBe(2);
-    expect(state.totals.sessions_scanned).toBe(1);
-    expect(state.runs.length).toBe(1);
-    expect(state.runs[0].new_blocks).toBe(2);
+    // Parse block events
+    let totalBlocks = 0;
+    const allCats = [];
+    for (const f of newFiles) {
+      const { count, categories } = parseBlockEvents(f);
+      totalBlocks += count;
+      for (const c of categories) allCats.push(c);
+    }
+    expect(totalBlocks).toBe(2);
+
+    // Aggregate and insert
+    const catCounts = {};
+    for (const cat of allCats) {
+      catCounts[cat] = (catCounts[cat] || 0) + 1;
+    }
+
+    db.exec('BEGIN');
+    db.prepare(
+      'INSERT INTO runs (ts, files_scanned, new_blocks, duration_ms) VALUES (?, ?, ?, ?)',
+    ).run(Date.now(), newFiles.length, totalBlocks, 10);
+    const runId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
+    const insertCat = db.prepare(
+      'INSERT INTO block_categories (run_id, category, count) VALUES (?, ?, ?)',
+    );
+    for (const [cat, cnt] of Object.entries(catCounts)) {
+      insertCat.run(runId, cat, cnt);
+    }
+    db.exec('COMMIT');
+
+    // Verify persisted state
+    const runRow = db.prepare('SELECT * FROM runs').get();
+    expect(runRow.new_blocks).toBe(2);
+    expect(runRow.files_scanned).toBe(1);
+
+    const catRows = db.prepare('SELECT * FROM block_categories ORDER BY category').all();
+    expect(catRows.length).toBe(2);
+
+    db.close();
   });
 });

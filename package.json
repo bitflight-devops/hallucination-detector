@@ -31,6 +31,9 @@
     "url": "https://github.com/bitflight-devops/hallucination-detector/issues"
   },
   "homepage": "https://github.com/bitflight-devops/hallucination-detector#readme",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.4.4",
     "@commitlint/cli": "^20.4.2",

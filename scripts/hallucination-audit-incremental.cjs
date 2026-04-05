@@ -3,8 +3,8 @@
  * PostToolUse hook: incremental audit accumulator.
  *
  * Runs after each tool use and accumulates block statistics from new session
- * JSONL files into a persistent audit state file at:
- *   ~/.hd/telemetry/audit-state.json
+ * JSONL files into a persistent SQLite database at:
+ *   ~/.hd/telemetry/hallucination-detector.db
  *
  * Performance constraints:
  * - Skips files larger than 5 MB.
@@ -17,7 +17,7 @@
  * PostToolUse hooks must emit NOTHING to stdout. Any stdout output from a
  * PostToolUse hook can suppress tool output shown to Claude.
  *
- * Zero runtime dependencies — Node.js built-ins only.
+ * Zero runtime dependencies — Node.js built-ins only (node:sqlite requires Node >= 22.5.0).
  */
 
 'use strict';
@@ -25,12 +25,13 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { DatabaseSync } = require('node:sqlite');
 
 // =============================================================================
 // Constants
 // =============================================================================
 
-const AUDIT_STATE_PATH = path.join(os.homedir(), '.hd', 'telemetry', 'audit-state.json');
+const DB_PATH = path.join(os.homedir(), '.hd', 'telemetry', 'hallucination-detector.db');
 
 /** Maximum file size to scan (5 MB). */
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
@@ -56,69 +57,50 @@ const CATEGORY_EVIDENCE_RE =
   /^\s*-\s*(speculation_language|causality_language|pseudo_quantification|completeness_claim|evaluative_design_claim|structural|template_validation_error)\s*:/;
 
 // =============================================================================
-// Default audit state shape
+// Database helpers
 // =============================================================================
 
 /**
- * @returns {object} A fresh default audit state object.
- */
-function defaultAuditState() {
-  return {
-    last_run: 0,
-    totals: {
-      sessions_scanned: 0,
-      blocks_total: 0,
-      by_category: {},
-      by_session_type: {},
-      estimated_cost_usd: 0,
-    },
-    runs: [],
-  };
-}
-
-// =============================================================================
-// State file I/O
-// =============================================================================
-
-/**
- * Load the audit state from disk, or return a fresh default state if the file
- * is absent or unparseable.
+ * Opens a DatabaseSync at an explicit path. Creates the directory if absent.
+ * Creates the runs and block_categories tables if they do not exist.
+ * Sets WAL journal mode for concurrent writer safety.
  *
- * @returns {object} Audit state object.
+ * Used directly by tests (avoids mocking the module-level DB_PATH constant).
+ *
+ * @param {string} dbPath - Absolute path to the SQLite database file.
+ * @returns {import('node:sqlite').DatabaseSync|null} Open database instance, or null on error.
  */
-function loadAuditState() {
+function _openDbAt(dbPath) {
   try {
-    if (!fs.existsSync(AUDIT_STATE_PATH)) return defaultAuditState();
-    const raw = fs.readFileSync(AUDIT_STATE_PATH, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return defaultAuditState();
-    // Ensure required sub-objects exist for forward compatibility.
-    if (!parsed.totals || typeof parsed.totals !== 'object')
-      parsed.totals = defaultAuditState().totals;
-    if (!Array.isArray(parsed.runs)) parsed.runs = [];
-    if (typeof parsed.last_run !== 'number') parsed.last_run = 0;
-    return parsed;
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const db = new DatabaseSync(dbPath);
+    db.exec('PRAGMA journal_mode=WAL');
+    db.exec(`CREATE TABLE IF NOT EXISTS runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      files_scanned INTEGER NOT NULL DEFAULT 0,
+      new_blocks INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0
+    )`);
+    db.exec(`CREATE TABLE IF NOT EXISTS block_categories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      category TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 1
+    )`);
+    return db;
   } catch {
-    return defaultAuditState();
+    return null;
   }
 }
 
 /**
- * Write audit state to disk atomically (write to .tmp, then rename).
- * Silent on failure.
+ * Opens the production database at DB_PATH.
  *
- * @param {object} state - Audit state object to persist.
+ * @returns {import('node:sqlite').DatabaseSync|null} Open database instance, or null on error.
  */
-function saveAuditState(state) {
-  try {
-    const dir = path.dirname(AUDIT_STATE_PATH);
-    fs.mkdirSync(dir, { recursive: true });
-    const tmpPath = `${AUDIT_STATE_PATH}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf-8');
-    fs.renameSync(tmpPath, AUDIT_STATE_PATH);
-  } catch {
-    // intentionally silent — state write failure must not affect hook behavior
-  }
+function openDb() {
+  return _openDbAt(DB_PATH);
 }
 
 // =============================================================================
@@ -224,49 +206,13 @@ function parseBlockEvents(filePath) {
 }
 
 // =============================================================================
-// State update
-// =============================================================================
-
-/**
- * Merge a delta (from scanning new files) into the audit state totals.
- * Appends a run record to state.runs.
- *
- * @param {object} state         - Mutable audit state object (modified in place).
- * @param {object} delta
- * @param {number}   delta.filesScanned  - Number of files scanned this run.
- * @param {number}   delta.newBlocks     - Total new block events found.
- * @param {string[]} delta.categories    - Category strings from block events.
- * @param {number}   delta.durationMs    - Wall-clock duration of this run.
- * @returns {object} The mutated state.
- */
-function updateAuditState(state, delta) {
-  state.totals.sessions_scanned += delta.filesScanned;
-  state.totals.blocks_total += delta.newBlocks;
-
-  // Increment per-category counters.
-  for (const cat of delta.categories) {
-    state.totals.by_category[cat] = (state.totals.by_category[cat] || 0) + 1;
-  }
-
-  // Append run record.
-  state.runs.push({
-    ts: Date.now(),
-    files_scanned: delta.filesScanned,
-    new_blocks: delta.newBlocks,
-    duration_ms: delta.durationMs,
-  });
-
-  return state;
-}
-
-// =============================================================================
 // Main
 // =============================================================================
 
 /**
  * PostToolUse hook entry point.
  * Reads stdin (ignored — PostToolUse input not needed for audit accumulation),
- * discovers new session files, extracts block events, and updates the state file.
+ * discovers new session files, extracts block events, and persists the run to SQLite.
  * Always exits 0. Never writes to stdout.
  */
 function main() {
@@ -279,8 +225,23 @@ function main() {
     // stdin unavailable — continue
   }
 
-  const state = loadAuditState();
-  const lastRun = state.last_run || 0;
+  let db = null;
+  try {
+    db = openDb();
+  } catch {
+    // silent — db failure must not affect session
+  }
+
+  // Derive last_run from the max ts in the runs table.
+  let lastRun = 0;
+  if (db) {
+    try {
+      const row = db.prepare('SELECT COALESCE(MAX(ts), 0) AS last_run FROM runs').get();
+      lastRun = row?.last_run ?? 0;
+    } catch {
+      // silent
+    }
+  }
 
   // Search for new session JSONL files in ~/.claude/projects/
   const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
@@ -299,17 +260,42 @@ function main() {
 
   const durationMs = Date.now() - startMs;
 
-  // Always update last_run, even when no new files were found.
-  state.last_run = Date.now();
+  if (db) {
+    try {
+      db.exec('BEGIN');
+      const insertRun = db.prepare(
+        'INSERT INTO runs (ts, files_scanned, new_blocks, duration_ms) VALUES (?, ?, ?, ?)',
+      );
+      insertRun.run(Date.now(), newFiles.length, totalNewBlocks, durationMs);
+      const runId = db.prepare('SELECT last_insert_rowid() AS id').get().id;
 
-  updateAuditState(state, {
-    filesScanned: newFiles.length,
-    newBlocks: totalNewBlocks,
-    categories: allCategories,
-    durationMs,
-  });
+      // Aggregate categories by count before inserting.
+      const catCounts = {};
+      for (const cat of allCategories) {
+        catCounts[cat] = (catCounts[cat] || 0) + 1;
+      }
+      const insertCat = db.prepare(
+        'INSERT INTO block_categories (run_id, category, count) VALUES (?, ?, ?)',
+      );
+      for (const [cat, count] of Object.entries(catCounts)) {
+        insertCat.run(runId, cat, count);
+      }
+      db.exec('COMMIT');
+    } catch {
+      try {
+        db.exec('ROLLBACK');
+      } catch {
+        // ignore rollback failure
+      }
+    } finally {
+      try {
+        db.close();
+      } catch {
+        // ignore close failure
+      }
+    }
+  }
 
-  saveAuditState(state);
   // PostToolUse hooks must not write to stdout.
   process.exit(0);
 }
@@ -322,11 +308,9 @@ if (require.main === module) {
 module.exports = {
   findNewSessionFiles,
   parseBlockEvents,
-  updateAuditState,
-  loadAuditState,
-  saveAuditState,
-  defaultAuditState,
-  AUDIT_STATE_PATH,
+  DB_PATH,
+  openDb,
+  _openDbAt,
   MAX_FILE_SIZE_BYTES,
   MAX_BLOCKS_PER_FILE,
 };
