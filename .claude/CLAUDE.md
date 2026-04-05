@@ -87,7 +87,7 @@ The validator (`validateClaimStructure`) blocks when:
 | `vague_verified_evidence`                        | VERIFIED or CAUSAL evidence uses non-specific text instead of a normalized prefix             |
 | `unnormalized_evidence`                          | VERIFIED, CAUSAL, or CORRELATED evidence present but no recognized prefix (blocks)            |
 
-### Trigger detection categories (7 active)
+### Trigger detection categories (8 active)
 
 1. `speculation_language` — "I think", "probably", "likely", etc.
 2. `causality_language` — "because", "caused by", "due to" without evidence nearby
@@ -96,6 +96,7 @@ The validator (`validateClaimStructure`) blocks when:
 5. `evaluative_design_claim` — ungrounded quality/design assertions
 6. `internal_contradiction` — contradiction between earlier and later claims in the same response
 7. `unsupported_absence` — "does not exist", "there is no", "cannot be found" claims without tool verification
+8. `ungrounded_behavioral_assertion` — "it works", "fixed", "done" etc. without tool-output or evidence backing; suppressed when valid observation template present
 
 ### Key functions
 

@@ -36,6 +36,7 @@ const DEFAULT_WEIGHTS = {
   evaluative_design_claim: 0.4,
   internal_contradiction: 0.35,
   unsupported_absence: 0.7,
+  ungrounded_behavioral_assertion: 0.5,
 };
 
 /**

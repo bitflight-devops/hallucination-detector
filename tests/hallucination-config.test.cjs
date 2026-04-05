@@ -17,7 +17,7 @@ const {
 // DEFAULT_WEIGHTS
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
-  it('has the expected 7 categories', () => {
+  it('has the expected 8 categories', () => {
     expect(DEFAULT_WEIGHTS).toHaveProperty('speculation_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('causality_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('pseudo_quantification');
@@ -25,15 +25,16 @@ describe('DEFAULT_WEIGHTS', () => {
     expect(DEFAULT_WEIGHTS).toHaveProperty('evaluative_design_claim');
     expect(DEFAULT_WEIGHTS).toHaveProperty('internal_contradiction');
     expect(DEFAULT_WEIGHTS).toHaveProperty('unsupported_absence');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('ungrounded_behavioral_assertion');
     expect(DEFAULT_WEIGHTS).not.toHaveProperty('fabricated_source');
-    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(7);
+    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(8);
   });
 
-  it('values sum to 2.35 (unsupported_absence: 0.7 added to prior 1.65)', () => {
+  it('values sum to 2.85 (ungrounded_behavioral_assertion: 0.5 added to prior 2.35)', () => {
     // aggregateWeightedScore normalizes by weightSum, so aggregate scores remain in [0, 1].
     // fabricated_source (0.1) removed — reserved for future implementation (issue #18).
     const sum = Object.values(DEFAULT_WEIGHTS).reduce((a, b) => a + b, 0);
-    expect(Math.abs(sum - 2.35)).toBeLessThan(1e-9);
+    expect(Math.abs(sum - 2.85)).toBeLessThan(1e-9);
   });
 
   it('internal_contradiction weight is 0.35', () => {
