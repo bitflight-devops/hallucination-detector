@@ -248,13 +248,13 @@ Validation: [what was run | none run]
 - Tool-check over-generalization → TOOL RUN requires `Does not cover:` field
 - Agent-report relay → AGENT REPORT requires attribution and independence disclosure
 
-**Phase 3c (`ungrounded_behavioral_assertion` trigger category) is in place** in the code but gated: it activates only after measurement confirms FP rate is confirmed below 25%. The `hasValidTemplate` suppression path is already implemented so that responses using a valid template are not blocked by this category.
+**Phase 3c (`ungrounded_behavioral_assertion` trigger category) is Active (shadow mode, 2026-04-05).** The category runs unconditionally via `isCategoryEnabled('ungrounded_behavioral_assertion')` but is suppressed for responses that pass the `hasValidTemplate` check. Pending: 20-sample FP rate audit to confirm rate remains below 25% before switching to blocking mode.
 
 ---
 
 ### Phase 4 — Measurement Infrastructure — PENDING
 
-**Gate for Phase 3c activation:** FP rate must be confirmed below 25% (via 20-sample audit) before the `ungrounded_behavioral_assertion` trigger category enables in blocking mode.
+**FP rate audit for Phase 3c:** FP rate must be confirmed below 25% (via 20-sample audit) before the `ungrounded_behavioral_assertion` trigger category switches from shadow mode to blocking mode.
 
 **What needs to be built:**
 

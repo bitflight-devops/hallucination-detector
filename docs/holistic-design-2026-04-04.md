@@ -142,10 +142,11 @@ Each needs context-aware suppression rules, not removal.
 `causality_language`). Evidence markers: test count patterns, exit codes, code spans
 within 200 chars.
 
-**Fix 5 — Template structural validator + new trigger category** (Phase 3, only after FP < 30%)  
+**Fix 5 — Template structural validator + new trigger category** (Phase 3)  
 Structural validator detects TOOL RUN / AGENT REPORT / COMMITTED blocks, validates
 required fields, fast-paths valid ones. `ungrounded_behavioral_assertion` trigger
-category activates only after measurement confirms the FP rate is below 30%.
+category is Active (shadow mode, 2026-04-05); shipped without shadow period. FP rate
+measurement pending before switching to blocking mode.
 
 ### Pillar 3 — Measurement Infrastructure (continuous improvement)
 
@@ -275,7 +276,7 @@ Phase 2 — Reduce FP rate (shadow mode required before enabling)
 Phase 3 — Positive expression contract
   Fix 5a: TOOL RUN / AGENT REPORT / COMMITTED in SessionStart framing
   Fix 5b: Structural validator in stop hook
-  Fix 5c: ungrounded_behavioral_assertion trigger category (shadow first)
+  Fix 5c: ungrounded_behavioral_assertion trigger category (Active, shadow mode, 2026-04-05; FP rate audit pending)
   → Measure: compliance rate, template adoption, cost delta
 
 Phase 4 — Measurement infrastructure

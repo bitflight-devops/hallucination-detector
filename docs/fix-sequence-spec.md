@@ -197,8 +197,9 @@ Validation: [what was run | none run]
 3. If valid: suppress `ungrounded_behavioral_assertion` trigger scan
 4. If invalid: block with specific missing fields listed
 
-**New trigger category: `ungrounded_behavioral_assertion`** (the category we built earlier,
-but only activated after Fixes 1-4 are in place and FP rate is confirmed below 25%)
+**New trigger category: `ungrounded_behavioral_assertion`** — Active (shadow mode, 2026-04-05).
+Shipped before Fixes 1-4 gate and before FP rate measurement. The FP < 25% gate still
+applies before switching to blocking mode.
 
 ### Acceptance criteria:
 
@@ -235,6 +236,8 @@ Fix 3 (narrow triggers) — after Fix 1 (ensures loop counter works before testi
 Fix 4 (completeness + evidence) — after Fix 3 (same codebase area)
   → Measurement checkpoint: confirm FP rate below 30% before proceeding
 Fix 5 (template system) — after checkpoint passes
+  ⚠️ NOTE: Fix 5c (ungrounded_behavioral_assertion) shipped active (shadow mode, 2026-04-05)
+  before this checkpoint. FP rate confirmation pending before switching to blocking mode.
 ```
 
 ## Files affected
