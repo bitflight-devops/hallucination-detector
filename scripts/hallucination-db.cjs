@@ -72,12 +72,35 @@ CREATE TABLE IF NOT EXISTS block_matches (
   log_id      INTEGER NOT NULL,
   category    TEXT    NOT NULL,
   evidence    TEXT,
+  confidence  INTEGER,
   was_ignored INTEGER NOT NULL DEFAULT 0
 );
+-- NOTE: When adding columns here, also update migrateSchemaV2() below.
 
 CREATE INDEX IF NOT EXISTS idx_stop_hook_session ON stop_hook_log(session_id, ts);
 CREATE INDEX IF NOT EXISTS idx_prior_block ON stop_hook_log(prior_block_id);
 `;
+
+// =============================================================================
+// Schema migration
+// =============================================================================
+
+/**
+ * Idempotent migration to schema v2: adds the `confidence INTEGER` column to
+ * `block_matches` for databases created before this column existed in SCHEMA_DDL.
+ *
+ * Fresh installs already have the column from SCHEMA_DDL; this is a no-op for them.
+ * Existing installs get the column added; SQLite defaults missing rows to NULL.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db - Open database instance.
+ */
+function migrateSchemaV2(db) {
+  const cols = db.prepare('PRAGMA table_info(block_matches)').all();
+  const hasConfidence = cols.some((c) => c.name === 'confidence');
+  if (!hasConfidence) {
+    db.exec('ALTER TABLE block_matches ADD COLUMN confidence INTEGER');
+  }
+}
 
 // =============================================================================
 // Database helpers
@@ -106,6 +129,7 @@ function _openDbAt(dbPath) {
   db.exec('PRAGMA journal_mode=WAL');
   db.exec('PRAGMA synchronous=NORMAL');
   db.exec(SCHEMA_DDL);
+  migrateSchemaV2(db);
   return db;
 }
 

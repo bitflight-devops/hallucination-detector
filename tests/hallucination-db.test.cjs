@@ -136,6 +136,106 @@ describe('hallucination-db', () => {
       }
     });
 
+    it('block_matches table has confidence column on fresh DB', () => {
+      const db = _openDbAt(':memory:');
+      try {
+        const cols = db
+          .prepare('PRAGMA table_info(block_matches)')
+          .all()
+          .map((r) => r.name);
+        expect(cols).toContain('confidence');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('migrateSchemaV2 adds confidence column to pre-migration DB', () => {
+      const os = require('node:os');
+      const path = require('node:path');
+      const { DatabaseSync } = require('node:sqlite');
+      const dbPath = path.join(
+        os.tmpdir(),
+        `hd-db-migrate-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+      );
+      let db = null;
+      try {
+        // Create DB with old schema (no confidence column)
+        db = new DatabaseSync(dbPath);
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS block_matches (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            log_id      INTEGER NOT NULL,
+            category    TEXT    NOT NULL,
+            evidence    TEXT,
+            was_ignored INTEGER NOT NULL DEFAULT 0
+          )
+        `);
+        db.close();
+        db = null;
+
+        // _openDbAt should run migrateSchemaV2 and add the column
+        db = _openDbAt(dbPath);
+        const cols = db
+          .prepare('PRAGMA table_info(block_matches)')
+          .all()
+          .map((r) => r.name);
+        expect(cols).toContain('confidence');
+      } finally {
+        if (db)
+          try {
+            db.close();
+          } catch {
+            /* ignore */
+          }
+        try {
+          require('node:fs').unlinkSync(dbPath);
+        } catch {
+          /* ignore */
+        }
+      }
+    });
+
+    it('migrateSchemaV2 is idempotent — calling _openDbAt twice produces no error', () => {
+      const os = require('node:os');
+      const path = require('node:path');
+      const dbPath = path.join(
+        os.tmpdir(),
+        `hd-db-idem-migrate-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+      );
+      let db1 = null;
+      let db2 = null;
+      try {
+        db1 = _openDbAt(dbPath);
+        db1.close();
+        db1 = null;
+        // Second call runs migrateSchemaV2 again — must not throw
+        db2 = _openDbAt(dbPath);
+        const cols = db2
+          .prepare('PRAGMA table_info(block_matches)')
+          .all()
+          .map((r) => r.name);
+        expect(cols).toContain('confidence');
+      } finally {
+        if (db1)
+          try {
+            db1.close();
+          } catch {
+            /* ignore */
+          }
+        if (db2)
+          try {
+            db2.close();
+          } catch {
+            /* ignore */
+          }
+        try {
+          require('node:fs').unlinkSync(dbPath);
+        } catch {
+          /* ignore */
+        }
+      }
+    });
+
     it('stop_hook_log table has prior_block_id and response_snippet columns', () => {
       const db = _openDbAt(':memory:');
       try {
