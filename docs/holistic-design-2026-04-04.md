@@ -157,13 +157,12 @@ PostToolUse hook processes each session file as it completes. State file tracks:
 - Per-run delta records
 
 DuckDB queries only new files (modified after `last_run`). Zero re-processing of
-historical data. Appends to `~/.claude/hallucination-detector/audit-state.json`.
+historical data. Appends to `~/.hd/telemetry/audit-state.json`.
 
 **Shadow mode**  
 `dryRun: true` config option. New detection rules log would-block decisions to
-`~/.claude/hallucination-detector/shadow-log.jsonl` without blocking. Zero token
-cost during shadow period. Shadow log schema matches block schema for direct
-comparison.
+`~/.hd/telemetry/shadow-log.jsonl` without blocking. Zero token cost during shadow
+period. Shadow log schema matches block schema for direct comparison.
 
 **A/B protocol per fix**
 
@@ -322,8 +321,8 @@ the human receives an observation to judge, not a conclusion to accept.
 
 | File                                                                               | Purpose                                                   |
 | ---------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `.claude/reports/baseline-2026-04-04.yaml`                                         | Block, compliance, and cost baseline for comparison       |
-| `.claude/reports/fix-sequence-spec.md`                                             | Detailed spec for each fix with acceptance criteria       |
+| `docs/baseline-2026-04-04.yaml`                                                    | Block, compliance, and cost baseline for comparison       |
+| `docs/fix-sequence-spec.md`                                                        | Detailed spec for each fix with acceptance criteria       |
 | `/tmp/hook-block-audit.md`                                                         | Full audit data underlying the baseline                   |
 | `/tmp/cost-baseline.yaml`                                                          | Token cost breakdown by category and model                |
 | `/tmp/session-behavior-analysis.md`                                                | Session-level bad pattern analysis with verbatim evidence |

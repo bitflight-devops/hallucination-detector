@@ -4,7 +4,7 @@
 
 # Date: 2026-04-04
 
-# Baseline: .claude/reports/baseline-2026-04-04.yaml
+# Baseline: docs/baseline-2026-04-04.yaml
 
 ## Measurement Protocol
 
@@ -216,12 +216,12 @@ but only activated after Fixes 1-4 are in place and FP rate is confirmed below 2
 After each fix is deployed, re-run the audit with this exact question to the
 agentskill-kaizen:transcript-analyst:
 
-> "Compare block patterns against baseline at .claude/reports/baseline-2026-04-04.yaml.
+> "Compare block patterns against baseline at docs/baseline-2026-04-04.yaml.
 > Use the same DuckDB methodology. Report: total blocks, blocks by session type,
 > blocks by category, top 5 trigger phrases, estimated FP rate from 20-sample,
 > sessions with 3+ blocks, max blocks in single session."
 
-Write comparison results to `.claude/reports/audit-YYYY-MM-DD.yaml` in the same
+Write comparison results to `~/.hd/audits/audit-YYYY-MM-DD.yaml` in the same
 schema as the baseline for direct diff.
 
 ---

@@ -9,6 +9,5 @@ dist/
 !.claude/commands/
 !.claude/scripts/
 !.claude/CLAUDE.md
-!.claude/reports/
 .worktrees/
 coverage/

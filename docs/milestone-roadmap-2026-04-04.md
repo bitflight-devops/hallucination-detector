@@ -64,21 +64,21 @@ Each new detection rule follows this protocol before being activated in blocking
 2. **Sample classification:** Classify 20 samples from the shadow log as TP / FP / impossible to comply.
 3. **Gate:** New FP rate must be less than the current rate AND new TP rate must not drop below current TP rate minus 5 percentage points.
 4. **Enable blocking mode.**
-5. **Measure same period after:** Re-run audit against baseline schema. Write results to `.claude/reports/audit-YYYY-MM-DD.yaml`.
+5. **Measure same period after:** Re-run audit against baseline schema. Write results to `~/.hd/audits/audit-YYYY-MM-DD.yaml`.
 
 ### Re-run audit query
 
 After each fix, delegate this prompt to `agentskill-kaizen:transcript-analyst`:
 
-> "Compare block patterns against baseline at `.claude/reports/baseline-2026-04-04.yaml`. Use the same DuckDB methodology. Report: total blocks, blocks by session type, blocks by category, top 5 trigger phrases, estimated FP rate from 20-sample, sessions with 3+ blocks, max blocks in single session."
+> "Compare block patterns against baseline at `docs/baseline-2026-04-04.yaml`. Use the same DuckDB methodology. Report: total blocks, blocks by session type, blocks by category, top 5 trigger phrases, estimated FP rate from 20-sample, sessions with 3+ blocks, max blocks in single session."
 
-Write comparison results to `.claude/reports/audit-YYYY-MM-DD.yaml` in the same schema as the baseline.
+Write comparison results to `~/.hd/audits/audit-YYYY-MM-DD.yaml` in the same schema as the baseline.
 
 ---
 
 ## Baseline Metrics (T0)
 
-Captured 2026-02-15 to 2026-04-04 (48 days). Source: `.claude/reports/baseline-2026-04-04.yaml`.
+Captured 2026-02-15 to 2026-04-04 (48 days). Source: `docs/baseline-2026-04-04.yaml`.
 
 ### Corpus
 
@@ -262,7 +262,7 @@ Validation: [what was run | none run]
 
 **Shadow mode config option:** `dryRun: true` in the hallucination-detector config. New detection rules log would-block decisions to `~/.hd/telemetry/shadow-log.jsonl` without issuing blocks. Shadow log schema matches block schema for direct comparison. Zero token cost during shadow period.
 
-**Audit comparison tooling:** Script that diffs a new `audit-YYYY-MM-DD.yaml` against `baseline-2026-04-04.yaml` and produces a delta table with directional arrows.
+**Audit comparison tooling:** Script that diffs a new `audit-YYYY-MM-DD.yaml` against `docs/baseline-2026-04-04.yaml` and produces a delta table with directional arrows.
 
 **Files to be created/modified:**
 
@@ -287,7 +287,7 @@ The `ungrounded_behavioral_assertion` trigger category, which is already present
 
 **Fast-path interaction:** Responses using a valid TOOL RUN, AGENT REPORT, or COMMITTED block will not be blocked by this category — the `hasValidTemplate` flag suppresses scanning. The category only fires on prose responses that make behavioral claims without any structured observation.
 
-**Acceptance criteria (from fix-sequence-spec.md):**
+**Acceptance criteria (from docs/fix-sequence-spec.md):**
 
 - Responses with valid TOOL RUN structure: 0 blocks for behavioral assertions
 - Responses with TOOL RUN missing required fields: blocked with specific field name
@@ -388,11 +388,11 @@ The expression contract requires `Command: [exact command]`, `Observed: [specifi
 
 ## Appendix: Source Documents
 
-| File                                            | Contents                                                                           |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `.claude/reports/holistic-design-2026-04-04.md` | Full three-pillar architecture design, problem space analysis, kaizen findings     |
-| `.claude/reports/baseline-2026-04-04.yaml`      | Complete block, compliance, and cost baseline in machine-readable form             |
-| `.claude/reports/fix-sequence-spec.md`          | Per-fix specs with acceptance criteria, suppression rules, and dependency ordering |
-| `/tmp/hook-block-audit.md`                      | Full audit data underlying the baseline (not committed — temp file)                |
-| `/tmp/cost-baseline.yaml`                       | Token cost breakdown by category and model (not committed — temp file)             |
-| `/tmp/session-behavior-analysis.md`             | Session-level analysis with verbatim evidence (not committed — temp file)          |
+| File                                 | Contents                                                                           |
+| ------------------------------------ | ---------------------------------------------------------------------------------- |
+| `docs/holistic-design-2026-04-04.md` | Full three-pillar architecture design, problem space analysis, kaizen findings     |
+| `docs/baseline-2026-04-04.yaml`      | Complete block, compliance, and cost baseline in machine-readable form             |
+| `docs/fix-sequence-spec.md`          | Per-fix specs with acceptance criteria, suppression rules, and dependency ordering |
+| `/tmp/hook-block-audit.md`           | Full audit data underlying the baseline (not committed — temp file)                |
+| `/tmp/cost-baseline.yaml`            | Token cost breakdown by category and model (not committed — temp file)             |
+| `/tmp/session-behavior-analysis.md`  | Session-level analysis with verbatim evidence (not committed — temp file)          |
