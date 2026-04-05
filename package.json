@@ -54,7 +54,20 @@
     "yaml": "^2.8.2"
   },
   "overrides": {
-    "minimatch": ">=10.2.3"
+    "minimatch": ">=10.2.3",
+    "lodash": ">=4.18.1",
+    "lodash-es": ">=4.18.1",
+    "handlebars": ">=4.7.9",
+    "picomatch": ">=2.3.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "minimatch": ">=10.2.3",
+      "lodash": ">=4.18.1",
+      "lodash-es": ">=4.18.1",
+      "handlebars": ">=4.7.9",
+      "picomatch": ">=2.3.2"
+    }
   },
   "lint-staged": {
     "*.{js,cjs,mjs,json}": [
