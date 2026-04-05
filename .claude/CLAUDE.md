@@ -249,7 +249,7 @@ For adding a new trigger-phrase pattern (Layer 2):
    - Define trigger phrases or regex patterns
    - Iterate over text, find matches
    - Apply suppression rules (questions, evidence, enumeration)
-   - Push `{ kind: 'your_category', evidence, offset }` to matches array
+   - Push `{ kind: 'your_category', evidence }` to matches array
 3. Add tests in `tests/hallucination-audit-stop.test.cjs`:
    - Test positive matches (text that should trigger)
    - Test negative matches (text that should NOT trigger — suppression cases)
