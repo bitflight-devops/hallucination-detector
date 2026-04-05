@@ -42,6 +42,7 @@ const {
 // =============================================================================
 
 const TELEMETRY_DB_PATH = path.join(os.homedir(), '.hd', 'telemetry', 'hallucination-detector.db');
+const SHADOW_LOG_PATH = path.join(os.homedir(), '.hd', 'telemetry', 'shadow-log.jsonl');
 
 const PRICING = {
   'claude-opus-4-6': { output: 75 / 1e6, cache_read: 1.5 / 1e6 },
@@ -170,6 +171,37 @@ function writeTelemetry(event) {
     );
   } catch {
     // intentionally silent — telemetry failure must not affect hook behavior
+  }
+}
+
+/**
+ * Append a single shadow-mode event to the shadow log JSONL file.
+ * Used when dryRun: true — records would-block decisions without actually blocking.
+ * Silent on any failure (same pattern as writeTelemetry).
+ *
+ * @param {object} event
+ * @param {string}   event.sessionId
+ * @param {string}   [event.model]
+ * @param {string[]} [event.categories]
+ * @param {string}   [event.evidence]
+ * @param {string}   [event.responseSnippet]
+ */
+function writeShadowLog(event) {
+  try {
+    const dir = path.dirname(SHADOW_LOG_PATH);
+    fs.mkdirSync(dir, { recursive: true });
+    const record = {
+      ts: Date.now(),
+      session_id: event.sessionId || '',
+      model: event.model || 'unknown',
+      categories: Array.isArray(event.categories) ? event.categories : [],
+      evidence: event.evidence || '',
+      response_snippet: event.responseSnippet || '',
+      dry_run: true,
+    };
+    fs.appendFileSync(SHADOW_LOG_PATH, `${JSON.stringify(record)}\n`, 'utf-8');
+  } catch {
+    // intentionally silent — shadow log failure must not affect hook behavior
   }
 }
 
@@ -1642,6 +1674,18 @@ function main() {
     process.exit(0);
   }
 
+  // Shadow mode: log would-block decisions without actually blocking.
+  if (config.dryRun) {
+    writeShadowLog({
+      sessionId,
+      model: assistantMeta.model,
+      categories: telemetryBase.categories,
+      evidence: telemetryBase.evidence.join(', '),
+      responseSnippet: lastAssistantText.slice(0, 300),
+    });
+    process.exit(0);
+  }
+
   if (structuralErrors.length > 0 && triggerMatches.length > 0) {
     blockAndExit(sessionId, buildCombinedBlockReason(structuralErrors, triggerMatches), maxBlocks, {
       ...telemetryBase,
@@ -1811,6 +1855,9 @@ module.exports = {
   writeTelemetry,
   getLastAssistantMeta,
   TELEMETRY_DB_PATH,
+  // Shadow mode
+  writeShadowLog,
+  SHADOW_LOG_PATH,
   // Observation template validation
   validateTemplateBlocks,
 };

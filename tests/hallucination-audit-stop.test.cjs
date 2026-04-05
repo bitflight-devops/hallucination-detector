@@ -3152,6 +3152,93 @@ describe('validateTemplateBlocks', () => {
 });
 
 // =============================================================================
+// shadow mode (dryRun)
+// =============================================================================
+describe('shadow mode (dryRun)', () => {
+  let tmpConfigPath;
+  let tmpTranscriptPath;
+
+  afterEach(() => {
+    if (tmpConfigPath) {
+      try {
+        fs.unlinkSync(tmpConfigPath);
+      } catch {
+        // ignore
+      }
+      tmpConfigPath = null;
+    }
+    if (tmpTranscriptPath) {
+      try {
+        fs.unlinkSync(tmpTranscriptPath);
+      } catch {
+        // ignore
+      }
+      tmpTranscriptPath = null;
+    }
+  });
+
+  it('when dryRun:true and trigger matches found → hook emits nothing (no block)', () => {
+    // Write a temp config with dryRun: true
+    tmpConfigPath = path.join(
+      os.tmpdir(),
+      `hd-dryrun-cfg-${Date.now()}-${Math.random().toString(36).slice(2)}.cjs`,
+    );
+    fs.writeFileSync(tmpConfigPath, 'module.exports = { dryRun: true };\n', 'utf-8');
+
+    tmpTranscriptPath = makeTempTranscript('I think the issue is in the config.');
+
+    const result = spawnSync(process.execPath, [SCRIPT_PATH], {
+      input: JSON.stringify({
+        transcript_path: tmpTranscriptPath,
+        session_id: 'dryrun-test-1',
+      }),
+      encoding: 'utf-8',
+      timeout: 10000,
+      env: { ...process.env, HALLUCINATION_DETECTOR_CONFIG: tmpConfigPath },
+    });
+
+    // dryRun mode must emit nothing to stdout — no block decision
+    expect(result.stdout.trim()).toBe('');
+    expect(result.status).toBe(0);
+  });
+
+  it('when dryRun:true → writeShadowLog does not throw and returns undefined', () => {
+    const { writeShadowLog } = require('../scripts/hallucination-audit-stop.cjs');
+    const result = writeShadowLog({
+      sessionId: 'shadow-test-session',
+      model: 'claude-sonnet-4-6',
+      categories: ['speculation_language'],
+      evidence: 'probably',
+      responseSnippet: 'I think this is probably a config issue.',
+    });
+    // writeShadowLog is fire-and-forget — it returns undefined
+    expect(result).toBeUndefined();
+  });
+
+  it('when dryRun:false (default) → block is emitted for trigger text', () => {
+    tmpTranscriptPath = makeTempTranscript('I think the issue is in the config.');
+    // Use a unique session ID per run to avoid stale loop-state files from prior runs.
+    const sessionId = `dryrun-default-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    // Spawn without HALLUCINATION_DETECTOR_CONFIG so defaults apply (dryRun: false).
+    const env = { ...process.env };
+    delete env.HALLUCINATION_DETECTOR_CONFIG;
+    const result = spawnSync(process.execPath, [SCRIPT_PATH], {
+      input: JSON.stringify({
+        transcript_path: tmpTranscriptPath,
+        session_id: sessionId,
+      }),
+      encoding: 'utf-8',
+      timeout: 10000,
+      env,
+    });
+    // Default config has dryRun: false — should block
+    expect(result.stdout.trim()).not.toBe('');
+    const parsed = JSON.parse(result.stdout.trim());
+    expect(parsed.decision).toBe('block');
+  });
+});
+
+// =============================================================================
 // template validation integration
 // =============================================================================
 describe('template validation integration', () => {

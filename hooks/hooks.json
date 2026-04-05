@@ -39,6 +39,19 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "description": "Accumulate block statistics from session JSONL files into audit state",
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hallucination-audit-incremental.cjs\"",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

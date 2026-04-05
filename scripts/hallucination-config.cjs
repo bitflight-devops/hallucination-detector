@@ -43,6 +43,8 @@ const DEFAULT_CONFIG = {
   weights: DEFAULT_WEIGHTS,
   introspect: false,
   introspectOutputPath: null,
+  // Shadow mode: log would-block events without actually blocking.
+  dryRun: false,
   // Global settings
   severity: 'error',
   maxTriggersPerResponse: 20,
@@ -305,6 +307,10 @@ function validateConfig(obj, source) {
   if ('introspect' in obj && typeof obj.introspect !== 'boolean') {
     warn('introspect', obj.introspect, false);
     delete obj.introspect;
+  }
+  if ('dryRun' in obj && typeof obj.dryRun !== 'boolean') {
+    warn('dryRun', obj.dryRun, false);
+    delete obj.dryRun;
   }
   if ('includeContext' in obj && typeof obj.includeContext !== 'boolean') {
     warn('includeContext', obj.includeContext, true);
