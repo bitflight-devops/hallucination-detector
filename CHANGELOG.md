@@ -1,3 +1,9 @@
+## [1.14.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.14.0...v1.14.1) (2026-04-05)
+
+### Bug Fixes
+
+- **lint:** apply template literal fixes from biome unsafe check ([df7392b](https://github.com/bitflight-devops/hallucination-detector/commit/df7392bcbb717745e4b530442e4f1e6dbbfde290))
+
 ## [1.14.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.13.1...v1.14.0) (2026-04-05)
 
 ### Features
