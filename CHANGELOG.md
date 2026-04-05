@@ -1,3 +1,9 @@
+## [1.15.2](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.1...v1.15.2) (2026-04-05)
+
+### Bug Fixes
+
+- **lint:** apply Biome formatter fixes after SQLite migration ([9aa3476](https://github.com/bitflight-devops/hallucination-detector/commit/9aa347630231d47d8c7a0dae64a6ac92f5ef0c10))
+
 ## [1.15.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.0...v1.15.1) (2026-04-05)
 
 ### Bug Fixes
