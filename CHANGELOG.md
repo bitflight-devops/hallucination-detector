@@ -1,3 +1,14 @@
+## [1.15.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.14.2...v1.15.0) (2026-04-05)
+
+### Features
+
+- **detection:** activate ungrounded_behavioral_assertion category (block 8) ([b323481](https://github.com/bitflight-devops/hallucination-detector/commit/b32348196dcbd16cee2b464715bb33642ce4fe6d)), closes [#54](https://github.com/bitflight-devops/hallucination-detector/issues/54)
+- **detection:** add block 8 ungrounded_behavioral_assertion to findTriggerMatches ([5bc0ec9](https://github.com/bitflight-devops/hallucination-detector/commit/5bc0ec94573df579795e690cd1df9f5ddf8a2273))
+
+### Bug Fixes
+
+- **detection:** fix is-working-on and fixed-hyphen false positives ([55a9731](https://github.com/bitflight-devops/hallucination-detector/commit/55a9731593cd4bc516967e5db860c16804ae0e73))
+
 ## [1.14.2](https://github.com/bitflight-devops/hallucination-detector/compare/v1.14.1...v1.14.2) (2026-04-05)
 
 ### Bug Fixes
