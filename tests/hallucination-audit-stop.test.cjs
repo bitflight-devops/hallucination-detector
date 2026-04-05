@@ -261,6 +261,72 @@ describe('causality language', () => {
     );
     expect(hedgedMatches.length).toBeGreaterThan(0);
   });
+
+  describe('NOMINALIZED_CAUSALITY definitional suppression', () => {
+    // Suppressed cases — abstract/category object noun triggers DEFINITIONAL_CAUSE_RE
+    it('suppresses "The underlying cause of false positives is..."', () => {
+      const matches = findTriggerMatches(
+        'The underlying cause of false positives is the regex pattern.',
+      );
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBe(0);
+    });
+
+    it('suppresses "The primary cause of errors is..."', () => {
+      const matches = findTriggerMatches('The primary cause of errors is the missing validation.');
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBe(0);
+    });
+
+    it('suppresses "The cause of failures is..."', () => {
+      const matches = findTriggerMatches('The cause of failures is an unhandled exception.');
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBe(0);
+    });
+
+    it('suppresses "The underlying cause of bugs is..."', () => {
+      const matches = findTriggerMatches('The underlying cause of bugs is poor test coverage.');
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBe(0);
+    });
+
+    it('suppresses "The cause of this behavior is..."', () => {
+      const matches = findTriggerMatches(
+        'The cause of this behavior is the configuration setting.',
+      );
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBe(0);
+    });
+
+    // Still-blocked cases — object noun is specific/not in the abstract category list
+    it('still flags "The primary cause of the outage was the new deploy"', () => {
+      const matches = findTriggerMatches('The primary cause of the outage was the new deploy.');
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBeGreaterThan(0);
+    });
+
+    it('still flags "The bug was caused by the missing null check"', () => {
+      const matches = findTriggerMatches('The bug was caused by the missing null check.');
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBeGreaterThan(0);
+    });
+
+    it('still flags "The underlying cause of this failure is the race condition" (specific instance)', () => {
+      const matches = findTriggerMatches(
+        'The underlying cause of this failure is the race condition.',
+      );
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBeGreaterThan(0);
+    });
+
+    it('flags second nominalized match when first is suppressed (mixed occurrence)', () => {
+      const text =
+        'The underlying cause of false positives is pattern matching. The underlying cause of the outage was a missing guard.';
+      const matches = findTriggerMatches(text);
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBeGreaterThan(0);
+    });
+  });
 });
 
 // =============================================================================
