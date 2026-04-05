@@ -1,3 +1,9 @@
+## [1.15.3](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.2...v1.15.3) (2026-04-05)
+
+### Bug Fixes
+
+- **deps:** force patched versions of vulnerable transitive devDependencies ([bbe28b1](https://github.com/bitflight-devops/hallucination-detector/commit/bbe28b187eae09e24cafdef1abf927448a4a6016))
+
 ## [1.15.2](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.1...v1.15.2) (2026-04-05)
 
 ### Bug Fixes
