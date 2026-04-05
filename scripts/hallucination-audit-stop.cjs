@@ -1573,8 +1573,8 @@ function findTriggerMatches(text, config = {}) {
           matches.push({ kind: 'ungrounded_behavioral_assertion', evidence: m[0].trim() });
         }
       }
-      runCustomPatterns('ungrounded_behavioral_assertion');
     }
+    runCustomPatterns('ungrounded_behavioral_assertion');
   }
 
   // Apply allowlist filter and maxTriggersPerResponse limit.
