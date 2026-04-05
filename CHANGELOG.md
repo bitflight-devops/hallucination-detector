@@ -1,3 +1,11 @@
+## [1.13.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.13.0...v1.13.1) (2026-04-05)
+
+### Bug Fixes
+
+- **detection:** add DEFINITIONAL_CAUSE_RE suppression to NOMINALIZED_CAUSALITY loop ([f0987d6](https://github.com/bitflight-devops/hallucination-detector/commit/f0987d61daefa2c9616e9abd92b18ac2f8462cdf))
+- **detection:** use matchAll to find first non-suppressed causality match ([99db70c](https://github.com/bitflight-devops/hallucination-detector/commit/99db70c2d8991d91afad2a475f4049f4b35b7773))
+- **lint:** apply Biome formatting to plugin.json files ([f851a73](https://github.com/bitflight-devops/hallucination-detector/commit/f851a731a2b9793d663b43a347468eb3f4f9f630))
+
 ## [1.13.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.12.4...v1.13.0) (2026-04-05)
 
 ### Features
