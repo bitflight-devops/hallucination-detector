@@ -612,7 +612,15 @@ function findTriggerMatches(text, config = {}) {
         /\bcan\s+be\s+traced\s+(?:back\s+)?to\b/i,
       ];
 
-      for (const re of [...IMPLICIT_CAUSALITY, ...NOMINALIZED_CAUSALITY, ...PASSIVE_CAUSALITY]) {
+      for (const re of [...IMPLICIT_CAUSALITY, ...PASSIVE_CAUSALITY]) {
+        const m = haystack.match(re);
+        if (!m) continue;
+        if (isIndexWithinQuestion(haystack, m.index)) continue;
+        if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
+        matches.push({ kind: 'causality_language', evidence: m[0].trim() });
+      }
+
+      for (const re of NOMINALIZED_CAUSALITY) {
         const m = haystack.match(re);
         if (!m) continue;
         if (isIndexWithinQuestion(haystack, m.index)) continue;
