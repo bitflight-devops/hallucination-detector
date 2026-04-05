@@ -551,6 +551,41 @@ describe('stripLowSignalRegions', () => {
     expect(stripped).not.toContain('probably');
     expect(stripped).toContain('not quoted');
   });
+
+  it('strips closed tilde fence — trigger inside does not fire', () => {
+    const text = 'before\n~~~\nprobably broken\n~~~\nafter';
+    const stripped = stripLowSignalRegions(text);
+    expect(stripped).not.toContain('probably');
+    expect(stripped).toContain('before');
+    expect(stripped).toContain('after');
+    const matches = findTriggerMatches(text);
+    expect(matches.filter((m) => m.kind === 'speculation_language')).toHaveLength(0);
+  });
+
+  it('strips unclosed tilde fence — content from fence to end is removed', () => {
+    const text = 'clean text\n~~~\nprobably leaked content';
+    const stripped = stripLowSignalRegions(text);
+    expect(stripped).not.toContain('probably');
+    expect(stripped).toContain('clean text');
+  });
+
+  it('strips both backtick and tilde fences', () => {
+    const text = 'a\n```\nprobably\n```\nb\n~~~\nlikely\n~~~\nc';
+    const stripped = stripLowSignalRegions(text);
+    expect(stripped).not.toContain('probably');
+    expect(stripped).not.toContain('likely');
+    expect(stripped).toContain('a');
+    expect(stripped).toContain('b');
+    expect(stripped).toContain('c');
+  });
+
+  it('strips tilde fence with language hint', () => {
+    const text = 'before\n~~~js\nI think this is fine\n~~~\nafter';
+    const stripped = stripLowSignalRegions(text);
+    expect(stripped).not.toContain('I think');
+    expect(stripped).toContain('before');
+    expect(stripped).toContain('after');
+  });
 });
 
 // =============================================================================

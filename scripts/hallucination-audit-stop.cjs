@@ -377,8 +377,17 @@ function stripLowSignalRegions(text) {
   // We only enforce these language rules on the assistant's narrative assertions.
   let out = text;
 
-  // Remove fenced code blocks.
+  // Remove backtick fenced code blocks.
   out = out.replace(/```[\s\S]*?```/g, '');
+
+  // Remove tilde fenced code blocks (closed).
+  out = out.replace(/~~~[^\n]*\n[\s\S]*?~~~/g, '');
+
+  // Remove unclosed tilde fences (fence opens but file ends before closing).
+  const unclosedTildeIdx = out.indexOf('~~~');
+  if (unclosedTildeIdx !== -1) {
+    out = out.slice(0, unclosedTildeIdx);
+  }
 
   // Remove inline code spans.
   out = out.replace(/`[^`\n]*`/g, '');
