@@ -613,22 +613,26 @@ function findTriggerMatches(text, config = {}) {
       ];
 
       for (const re of [...IMPLICIT_CAUSALITY, ...PASSIVE_CAUSALITY]) {
-        const m = haystack.match(re);
-        if (!m) continue;
-        if (isIndexWithinQuestion(haystack, m.index)) continue;
-        if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
-        matches.push({ kind: 'causality_language', evidence: m[0].trim() });
+        const gRe = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+        for (const m of haystack.matchAll(gRe)) {
+          if (isIndexWithinQuestion(haystack, m.index)) continue;
+          if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
+          matches.push({ kind: 'causality_language', evidence: m[0].trim() });
+          break;
+        }
       }
 
       const DEFINITIONAL_CAUSE_RE =
         /\b(?:cause|reason|explanation|root\s+cause)\s+(?:of|for|behind)\s+(?:false\s+positives?|errors?|failures?|bugs?|issues?|this\s+(?:pattern|behavior|behaviour))\b/i;
       for (const re of NOMINALIZED_CAUSALITY) {
-        const m = haystack.match(re);
-        if (!m) continue;
-        if (isIndexWithinQuestion(haystack, m.index)) continue;
-        if (DEFINITIONAL_CAUSE_RE.test(haystack.slice(m.index, m.index + 80))) continue;
-        if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
-        matches.push({ kind: 'causality_language', evidence: m[0].trim() });
+        const gRe = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+        for (const m of haystack.matchAll(gRe)) {
+          if (isIndexWithinQuestion(haystack, m.index)) continue;
+          if (DEFINITIONAL_CAUSE_RE.test(haystack.slice(m.index, m.index + 80))) continue;
+          if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
+          matches.push({ kind: 'causality_language', evidence: m[0].trim() });
+          break;
+        }
       }
     }
     runCustomPatterns('causality_language');
@@ -710,15 +714,17 @@ function findTriggerMatches(text, config = {}) {
       ];
 
       for (const re of completenessRegexes) {
-        const m = haystack.match(re);
-        if (!m) continue;
-        if (isIndexWithinQuestion(haystack, m.index)) continue;
-        // Suppress when inside an enumeration list (Change 5)
-        if (hasEnumerationNearby(haystack, m.index)) continue;
-        // Suppress negated participles after fully/completely (disclaimers, not overclaims)
-        if (/^(?:fully|completely)\s/i.test(m[0]) && isNegatedParticiple(m[0], haystack, m.index))
-          continue;
-        matches.push({ kind: 'completeness_claim', evidence: m[0].trim() });
+        const gRe = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+        for (const m of haystack.matchAll(gRe)) {
+          if (isIndexWithinQuestion(haystack, m.index)) continue;
+          // Suppress when inside an enumeration list (Change 5)
+          if (hasEnumerationNearby(haystack, m.index)) continue;
+          // Suppress negated participles after fully/completely (disclaimers, not overclaims)
+          if (/^(?:fully|completely)\s/i.test(m[0]) && isNegatedParticiple(m[0], haystack, m.index))
+            continue;
+          matches.push({ kind: 'completeness_claim', evidence: m[0].trim() });
+          break;
+        }
       }
     }
     runCustomPatterns('completeness_claim');

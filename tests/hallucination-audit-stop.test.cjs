@@ -308,6 +308,14 @@ describe('causality language', () => {
       const causalMatches = matches.filter((m) => m.kind === 'causality_language');
       expect(causalMatches.length).toBeGreaterThan(0);
     });
+
+    it('flags second nominalized match when first is suppressed (mixed occurrence)', () => {
+      const text =
+        'The underlying cause of false positives is pattern matching. The underlying cause of the outage was a missing guard.';
+      const matches = findTriggerMatches(text);
+      const causalMatches = matches.filter((m) => m.kind === 'causality_language');
+      expect(causalMatches.length).toBeGreaterThan(0);
+    });
   });
 });
 
