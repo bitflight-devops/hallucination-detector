@@ -11,3 +11,4 @@ dist/
 !.claude/CLAUDE.md
 .worktrees/
 coverage/
+.planning/
