@@ -14,9 +14,18 @@ A Claude Code stop-hook plugin that audits assistant output for speculation, ung
 | `scripts/hallucination-framing-session-start.cjs` | **SessionStart hook** — injects behavioral framing text into session context at startup.                                                                                                                                     |
 | `scripts/hallucination-claim-structure.cjs`       | Structured claim annotation — classifies claims and annotates with evidence requirements.                                                                                                                                    |
 | `scripts/hallucination-annotate.cjs`              | Annotation pipeline — marks up text with detected patterns and structured metadata.                                                                                                                                          |
-| `scripts/hallucination-config.cjs`                | Configuration loading — `loadConfig()`, `loadWeights()`, `DEFAULT_WEIGHTS`, `DEFAULT_CONFIG`.                                                                                                                                |
+| `scripts/hallucination-config.cjs`                | Configuration loading — `loadConfig()`, `loadWeights()`, `DEFAULT_WEIGHTS`, `DEFAULT_CONFIG`. Exports `isValidCategoryThreshold()` for per-category threshold validation.                                                    |
 | `scripts/hallucination-memory-gate.cjs`           | Memory gate — `computeMemoryGate()` with `RETAINABLE_LABELS` for persistence gating.                                                                                                                                         |
 | `hooks/hooks.json`                                | Registers both hooks with Claude Code.                                                                                                                                                                                       |
+
+### Configuration: `categories` field
+
+`DEFAULT_CONFIG.categories` is `{}`. Each key is a detection category name (one of the 8 active kinds listed below). Each value is an object that may include:
+
+- `uncertain` and `hallucinated` — per-category threshold pair (both required, both finite numbers in [0, 1], `uncertain <= hallucinated`). When present and valid, `scoreText()` uses these thresholds for sentences where that category is the sole active trigger, instead of global `config.thresholds`. Invalid pairs are dropped at load time with a stderr warning; other category fields are preserved.
+- Additional fields (`customPatterns`, `replacePatterns`, etc.) are preserved without threshold validation.
+
+Missing categories fall back to global `thresholds`. Valid category names are the keys of `DEFAULT_WEIGHTS` in `hallucination-config.cjs`.
 
 ### Two-layer detection architecture
 
@@ -100,12 +109,15 @@ The validator (`validateClaimStructure`) blocks when:
 
 ### Key functions
 
-| Function                         | File                                | Returns                                 |
-| -------------------------------- | ----------------------------------- | --------------------------------------- |
-| `validateClaimStructure(text)`   | `hallucination-claim-structure.cjs` | `{ structured, valid, errors, claims }` |
-| `findTriggerMatches(text)`       | `hallucination-audit-stop.cjs`      | `[{ kind, evidence }]`                  |
-| `computeMemoryGate(claims)`      | `hallucination-memory-gate.cjs`     | `{ allowed: Set, blocked: Set }`        |
-| `loadConfig()` / `loadWeights()` | `hallucination-config.cjs`          | Config/weight objects with defaults     |
+| Function                          | File                                | Returns                                 |
+| --------------------------------- | ----------------------------------- | --------------------------------------- |
+| `validateClaimStructure(text)`    | `hallucination-claim-structure.cjs` | `{ structured, valid, errors, claims }` |
+| `findTriggerMatches(text)`        | `hallucination-audit-stop.cjs`      | `[{ kind, evidence }]`                  |
+| `computeMemoryGate(claims)`       | `hallucination-memory-gate.cjs`     | `{ allowed: Set, blocked: Set }`        |
+| `loadConfig()` / `loadWeights()`  | `hallucination-config.cjs`          | Config/weight objects with defaults     |
+| `isValidCategoryThreshold(value)` | `hallucination-config.cjs`          | `boolean`                               |
+
+**`scoreText()` per-category threshold behavior:** When scoring a sentence, if exactly one detection category is active (has a non-zero score), `scoreText()` checks `config.categories[categoryName]` for a valid threshold pair. If found, those per-category thresholds replace global `config.thresholds` for that sentence's label classification (`GROUNDED`, `UNCERTAIN`, or `HALLUCINATED`). When zero or multiple categories are active, global thresholds apply. This affects sentence label classification in block reason output only — it does NOT change the block/allow gate decision.
 
 ### Suppression mechanisms
 
@@ -290,12 +302,12 @@ The `.gitignore` ignores `.claude/` by default but has explicit exceptions for `
 
 **Never write output, reports, telemetry, or design artifacts to `.claude/`.** `.claude/` is Claude Code's internal settings directory. Writing output there triggers security warnings and creates ambiguity between tool configuration and project artifacts.
 
-| Output type                          | Correct location                                                                              |
-| ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| Runtime telemetry, audit state, logs | `~/.hd/telemetry/` (e.g. `hallucination-detector.db`, `shadow-log.jsonl`, `audit-state.json`) |
-| Periodic audit results               | `~/.hd/audits/` (e.g. `audit-YYYY-MM-DD.yaml`)                                                |
-| Design artifacts versioned with code | `docs/` in the repo root                                                                      |
-| Session working notes                | `/tmp/` (not committed)                                                                       |
+| Output type                          | Correct location                                                          |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| Runtime telemetry, audit state, logs | `~/.hd/telemetry/` (e.g. `hallucination-detector.db`, `shadow-log.jsonl`) |
+| Periodic audit results               | `~/.hd/audits/` (e.g. `audit-YYYY-MM-DD.yaml`)                            |
+| Design artifacts versioned with code | `docs/` in the repo root                                                  |
+| Session working notes                | `/tmp/` (not committed)                                                   |
 
 The telemetry database is at `~/.hd/telemetry/hallucination-detector.db`. Audit comparison files go to `~/.hd/audits/`. Design documents that should be version-controlled (baselines, specs, roadmaps) go in `docs/`.
 
