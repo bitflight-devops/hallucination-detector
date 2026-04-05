@@ -27,6 +27,8 @@ const {
   writeTelemetry,
   getLastAssistantMeta,
   validateTemplateBlocks,
+  getSentenceContaining,
+  hasSentenceCodeReference,
 } = require('../scripts/hallucination-audit-stop.cjs');
 
 const SCRIPT_PATH = path.resolve(__dirname, '../scripts/hallucination-audit-stop.cjs');
@@ -3283,5 +3285,125 @@ describe('template validation integration', () => {
     } finally {
       fs.unlinkSync(transcriptFile);
     }
+  });
+});
+
+// =============================================================================
+// getSentenceContaining — unit tests
+// =============================================================================
+describe('getSentenceContaining', () => {
+  it('returns the whole string when there are no sentence boundaries', () => {
+    const text = 'no boundaries here';
+    expect(getSentenceContaining(text, 5)).toBe('no boundaries here');
+  });
+
+  it('extracts the middle sentence when surrounded by others', () => {
+    const text = 'First sentence. Second sentence. Third sentence.';
+    // index 16 is inside "Second sentence"
+    const result = getSentenceContaining(text, 16);
+    expect(result).toContain('Second sentence');
+  });
+
+  it('handles index at the very start of text', () => {
+    const text = 'Hello world. Next sentence.';
+    const result = getSentenceContaining(text, 0);
+    expect(result).toContain('Hello world');
+  });
+
+  it('handles index at the very end of text', () => {
+    const text = 'First. Last part';
+    const result = getSentenceContaining(text, text.length - 1);
+    expect(result).toContain('Last part');
+  });
+});
+
+// =============================================================================
+// hasSentenceCodeReference — unit tests
+// =============================================================================
+describe('hasSentenceCodeReference', () => {
+  it('returns true for sentence with inline code backtick at match index', () => {
+    const text = 'This fails because `handler.cjs:42` returns null.';
+    // index of 'because' is 11
+    const idx = text.indexOf('because');
+    expect(hasSentenceCodeReference(text, idx)).toBe(true);
+  });
+
+  it('returns true for sentence with file path reference at match index', () => {
+    const text = 'Caused by a missing import in utils.ts somewhere.';
+    const idx = text.indexOf('Caused');
+    expect(hasSentenceCodeReference(text, idx)).toBe(true);
+  });
+
+  it('returns true for sentence with function call pattern parse()', () => {
+    const text = 'The error occurs because of the function call parse().';
+    const idx = text.indexOf('because');
+    expect(hasSentenceCodeReference(text, idx)).toBe(true);
+  });
+
+  it('returns true for sentence with "line 17" reference', () => {
+    const text = 'The test fails because line 17 has the wrong value.';
+    const idx = text.indexOf('because');
+    expect(hasSentenceCodeReference(text, idx)).toBe(true);
+  });
+
+  it('returns false for sentence with no code reference', () => {
+    const text = 'The test fails because the mock is wrong.';
+    const idx = text.indexOf('because');
+    expect(hasSentenceCodeReference(text, idx)).toBe(false);
+  });
+});
+
+// =============================================================================
+// causality_language — sentence-scoped code-reference suppression
+// =============================================================================
+describe('causality_language — sentence-scoped code-reference suppression', () => {
+  it('suppresses "because" when inline code backtick is in the same sentence', () => {
+    const matches = findTriggerMatches('This fails because `handler.cjs:42` returns null.');
+    const causal = matches.filter(
+      (m) => m.kind === 'causality_language' && m.evidence === 'because',
+    );
+    expect(causal).toHaveLength(0);
+  });
+
+  it('suppresses "because" when a function call pattern is in the same sentence', () => {
+    const matches = findTriggerMatches('The error occurs because of the function call `parse()`.');
+    const causal = matches.filter(
+      (m) => m.kind === 'causality_language' && m.evidence === 'because',
+    );
+    expect(causal).toHaveLength(0);
+  });
+
+  it('suppresses "because" when a line number reference is in the same sentence', () => {
+    const matches = findTriggerMatches('The test fails because line 17 has the wrong value.');
+    const causal = matches.filter(
+      (m) => m.kind === 'causality_language' && m.evidence === 'because',
+    );
+    expect(causal).toHaveLength(0);
+  });
+
+  it('does NOT suppress "because" when no code reference is present (true positive)', () => {
+    const matches = findTriggerMatches('The test fails because the mock is wrong.');
+    const causal = matches.filter(
+      (m) => m.kind === 'causality_language' && m.evidence === 'because',
+    );
+    expect(causal.length).toBeGreaterThan(0);
+  });
+
+  it('suppresses "caused by" when a file path is in the same sentence', () => {
+    const matches = findTriggerMatches('Caused by a missing import in utils.ts.');
+    const causal = matches.filter((m) => m.kind === 'causality_language');
+    expect(causal).toHaveLength(0);
+  });
+
+  it('blocks when causal trigger and code ref are in different sentences beyond the evidence window', () => {
+    // The code ref must be > 300 chars away so hasEvidenceNearby does not suppress,
+    // and it must be in a different sentence so hasSentenceCodeReference does not suppress.
+    const padding = 'x'.repeat(350);
+    const text = `The test fails because the mock is wrong. ${padding} See handler.cjs:42 for context.`;
+    const matches = findTriggerMatches(text);
+    const causal = matches.filter(
+      (m) => m.kind === 'causality_language' && m.evidence === 'because',
+    );
+    expect(causal.length).toBeGreaterThan(0);
   });
 });

@@ -467,6 +467,72 @@ function isIndexWithinQuestion(text, idx) {
   return segment.includes('?');
 }
 
+/**
+ * Extract the sentence containing the character at `index` from `text`.
+ * Sentence boundaries: '.', '!', '?', '\n\n', or start/end of string.
+ * A '.' followed immediately by a word character is treated as an intra-token
+ * dot (file extension, decimal, URL segment) and is NOT a sentence boundary.
+ * Returns the sentence as a string.
+ */
+function getSentenceContaining(text, index) {
+  // Find start: walk back to previous sentence-ending punctuation or start.
+  // Skip dots that are immediately followed by a word character (intra-token dots).
+  let start = index;
+  while (start > 0) {
+    const prev = text[start - 1];
+    if (!/[.!?\n]/.test(prev)) {
+      start--;
+      continue;
+    }
+    // It is a punctuation char — check if it's an intra-token dot.
+    if (prev === '.' && start < text.length && /\w/.test(text[start])) {
+      // Dot followed by word char: part of a file extension or similar — keep walking.
+      start--;
+      continue;
+    }
+    break;
+  }
+
+  // Find end: walk forward to next sentence-ending punctuation or end.
+  // Skip dots immediately followed by a word character (intra-token dots).
+  let end = index;
+  while (end < text.length) {
+    if (text[end] === '\n' && text[end + 1] === '\n') break;
+    if (/[!?]/.test(text[end])) break;
+    if (text[end] === '.') {
+      // Dot followed by word char: intra-token, skip.
+      if (end + 1 < text.length && /\w/.test(text[end + 1])) {
+        end++;
+        continue;
+      }
+      break;
+    }
+    end++;
+  }
+  return text.slice(start, end + 1).trim();
+}
+
+// File-extension pattern for hasSentenceCodeReference — compiled once at module scope.
+const SENTENCE_FILE_EXT_RE = /\b[\w./-]+\.(cjs|mjs|js|ts|py|json|yaml|yml|md|sh|rb|go|rs)\b/;
+// Function-call pattern (word followed by open paren).
+const SENTENCE_FUNC_CALL_RE = /\b\w+\s*\(/;
+// Line-number reference: "line 17" or ":42" style.
+const SENTENCE_LINE_NUM_RE = /\bline\s+\d+\b|:\d+\b/i;
+
+/**
+ * Returns true if the sentence containing `index` in `text` contains any
+ * code reference signal: file path, function call, line number, or backtick.
+ */
+function hasSentenceCodeReference(text, index) {
+  const sentence = getSentenceContaining(text, index);
+  return (
+    SENTENCE_FILE_EXT_RE.test(sentence) ||
+    SENTENCE_FUNC_CALL_RE.test(sentence) ||
+    SENTENCE_LINE_NUM_RE.test(sentence) ||
+    sentence.includes('`')
+  );
+}
+
 // Change 4: isQualityScore — distinguishes genuine quality ratings from ratios/counts.
 function isQualityScore(text, matchStr, matchIndex) {
   const [numStr] = matchStr.split('/');
@@ -947,12 +1013,17 @@ function findTriggerMatches(text, config = {}) {
               continue;
             // Evidence nearby suppresses plain 'because' (expanded window: 300 chars)
             if (hasEvidenceNearby(haystack, idx, rawText, 300)) continue;
+            // Sentence-scoped code reference suppression: file path, function call,
+            // line number, or backtick in the same sentence — grounded citation.
+            if (hasSentenceCodeReference(rawText, idx)) continue;
             matches.push({ kind: 'causality_language', evidence: phrase });
             continue;
           }
 
           // All other causality phrases: suppress when evidence is nearby
           if (hasEvidenceNearby(haystack, idx, rawText)) continue;
+          // Sentence-scoped code reference suppression for non-because phrases.
+          if (hasSentenceCodeReference(rawText, idx)) continue;
           matches.push({ kind: 'causality_language', evidence: phrase });
           break; // one flag per phrase kind is sufficient for non-because phrases
         }
@@ -978,6 +1049,8 @@ function findTriggerMatches(text, config = {}) {
         if (!m) continue;
         if (isIndexWithinQuestion(haystack, m.index)) continue;
         if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
+        // Sentence-scoped code reference suppression for regex-matched causality patterns.
+        if (hasSentenceCodeReference(rawText, m.index)) continue;
         matches.push({ kind: 'causality_language', evidence: m[0].trim() });
       }
     }
@@ -1827,6 +1900,8 @@ module.exports = {
   isMainChainEntry,
   hasEvidenceNearby,
   isIndexWithinQuestion,
+  getSentenceContaining,
+  hasSentenceCodeReference,
   isQualityScore,
   hasEnumerationNearby,
   isNegatedParticiple,
