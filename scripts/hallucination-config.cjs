@@ -35,6 +35,7 @@ const DEFAULT_WEIGHTS = {
   // fabricated_source: reserved for future implementation (issue #18)
   evaluative_design_claim: 0.4,
   internal_contradiction: 0.35,
+  unsupported_absence: 0.7,
 };
 
 /**

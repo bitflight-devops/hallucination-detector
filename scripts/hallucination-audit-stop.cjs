@@ -574,6 +574,13 @@ function isQualityScore(text, matchStr, matchIndex) {
 // Global flag required for String.prototype.match to return all matches.
 const LIST_ITEM_RE = /^\s*(?:\d+[.)]\s|\*\s|-\s)/gm;
 
+// Bare absence-claim phrases. Compiled once at module level per performance guidelines.
+// Matches: "there is no", "there are no", "no such", "doesn't exist", "does not exist",
+// "cannot be found", "couldn't find", "can't find", "is missing", "absence of",
+// "no config", "no file", "no function", "no method".
+const ABSENCE_CLAIM_RE =
+  /\b(?:there\s+is\s+no|there\s+are\s+no|no\s+such|doesn't\s+exist|does\s+not\s+exist|cannot\s+be\s+found|couldn't\s+find|can't\s+find|is\s+missing|absence\s+of|no\s+config|no\s+file|no\s+function|no\s+method)\b/gi;
+
 // Uncertainty markers — phrases that signal the assistant is explicitly disclosing
 // what it does NOT know. When a speculation phrase appears near these markers,
 // the speculation serves a disclosure function, not a speculative-assertion function.
@@ -965,6 +972,26 @@ function isNegatedParticiple(matchedText, fullText, matchIndex) {
 }
 
 /**
+ * Check whether recent assistant turns in the transcript contain tool_use blocks.
+ * @param {Array<{type: string, message: {content: Array}}>} entries - Parsed JSONL transcript entries
+ * @param {number} recentTurns - Number of recent assistant turns to check (default: 2)
+ * @returns {boolean} True if any tool_use is found in content blocks
+ */
+function hasToolUseInRecentEntries(entries, recentTurns = 2) {
+  if (!Array.isArray(entries) || entries.length === 0) return false;
+  let found = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (!entry || entry.type !== 'assistant') continue;
+    found++;
+    const content = entry.message?.content;
+    if (Array.isArray(content) && content.some((block) => block?.type === 'tool_use')) return true;
+    if (found >= recentTurns) break;
+  }
+  return false;
+}
+
+/**
  * Detects linguistic signals that suggest uncertainty, causal claims, uncited quantification, completeness assertions, or evaluative-design statements in the provided text.
  *
  * @param {string} text - The text to scan for trigger patterns (typically an assistant message).
@@ -974,7 +1001,7 @@ function isNegatedParticiple(matchedText, fullText, matchIndex) {
  *   - `config.categories.<name>.replacePatterns` — when `true`, customPatterns replaces built-ins.
  *   - `config.allowlist` — array of strings/RegExps; any match whose evidence satisfies an entry is dropped.
  *   - `config.maxTriggersPerResponse` — upper bound on the number of returned matches.
- * @returns {Array<{kind: string, evidence: string}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, or `evaluative_design_claim`, and `evidence` is the matched snippet from the text.
+ * @returns {Array<{kind: string, evidence: string}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, `evaluative_design_claim`, `internal_contradiction`, or `unsupported_absence`, and `evidence` is the matched snippet from the text.
  */
 function findTriggerMatches(text, config = {}) {
   const rawMatches = [];
@@ -1480,6 +1507,22 @@ function findTriggerMatches(text, config = {}) {
       }
     }
     runCustomPatterns('internal_contradiction');
+  }
+
+  // 7) Unsupported absence claims: bare assertions that something doesn't exist or can't be found,
+  // without tool-use evidence. Post-filtered in main() when recent tool use is present.
+  if (isCategoryEnabled('unsupported_absence')) {
+    if (useBuiltIn('unsupported_absence')) {
+      ABSENCE_CLAIM_RE.lastIndex = 0;
+      for (const m of haystack.matchAll(ABSENCE_CLAIM_RE)) {
+        const idx = m.index;
+        if (isIndexWithinQuestion(haystack, idx)) continue;
+        if (hasEnumerationNearby(haystack, idx)) continue;
+        if (isNegatedParticiple(m[0], haystack, idx)) continue;
+        matches.push({ kind: 'unsupported_absence', evidence: m[0].trim(), offset: idx });
+      }
+    }
+    runCustomPatterns('unsupported_absence');
   }
 
   // Apply allowlist filter and maxTriggersPerResponse limit.
@@ -2034,6 +2077,13 @@ function main() {
     triggerMatches = findTriggerMatches(lastAssistantText, config);
   }
 
+  // Post-filter: unsupported_absence is only problematic without recent tool use.
+  // When entries is empty (stdin-supplied message, no transcript), hasToolUseInRecentEntries
+  // returns false — conservatively keeps absence flags when transcript is unavailable.
+  if (hasToolUseInRecentEntries(entries)) {
+    triggerMatches = triggerMatches.filter((m) => m.kind !== 'unsupported_absence');
+  }
+
   // Base telemetry context shared across all exit paths below.
   const telemetryBase = {
     session_id: sessionId,
@@ -2304,4 +2354,7 @@ module.exports = {
   stemWord,
   NEGATION_POLARITY_RE,
   INTERNAL_CONTRADICTION_STOP_WORDS,
+  // Absence claim detection exports
+  hasToolUseInRecentEntries,
+  ABSENCE_CLAIM_RE,
 };

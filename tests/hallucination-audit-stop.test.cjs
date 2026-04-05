@@ -34,6 +34,7 @@ const {
   extractSignificantTerms,
   stripNegationMarkers,
   detectInternalContradictions,
+  hasToolUseInRecentEntries,
 } = require('../scripts/hallucination-audit-stop.cjs');
 
 const SCRIPT_PATH = path.resolve(__dirname, '../scripts/hallucination-audit-stop.cjs');
@@ -789,6 +790,7 @@ describe('aggregateWeightedScore', () => {
       completeness_claim: 1,
       evaluative_design_claim: 1,
       internal_contradiction: 1,
+      unsupported_absence: 1,
     };
     expect(aggregateWeightedScore(scores, DEFAULT_WEIGHTS)).toBe(1);
   });
@@ -801,11 +803,12 @@ describe('aggregateWeightedScore', () => {
       completeness_claim: 0,
       evaluative_design_claim: 0,
       internal_contradiction: 0,
+      unsupported_absence: 0,
     };
-    // speculation weight = 0.25, weightSum = 1.65 (internal_contradiction: 0.35 added)
-    // result = 0.25 / 1.65 ≈ 0.15152
+    // speculation weight = 0.25, weightSum = 2.35 (unsupported_absence: 0.7 added)
+    // result = 0.25 / 2.35 ≈ 0.10638
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    const expected = 0.25 / 1.65;
+    const expected = 0.25 / 2.35;
     expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
@@ -819,8 +822,8 @@ describe('aggregateWeightedScore', () => {
   it('handles missing score keys as 0', () => {
     const scores = { speculation_language: 1 };
     const result = aggregateWeightedScore(scores, DEFAULT_WEIGHTS);
-    // Only speculation fires: 0.25 / 1.65 ≈ 0.15152 (weightSum = 1.65 with internal_contradiction: 0.35)
-    const expected = 0.25 / 1.65;
+    // Only speculation fires: 0.25 / 2.35 ≈ 0.10638 (weightSum = 2.35 with unsupported_absence: 0.7)
+    const expected = 0.25 / 2.35;
     expect(Math.abs(result - expected)).toBeLessThan(0.001);
   });
 
@@ -913,8 +916,8 @@ describe('scoreText', () => {
   });
 
   it('causal sentence gets GROUNDED label', () => {
-    // causality_language weight = 0.30, weightSum = 1.65 → score = 0.30/1.65 ≈ 0.182 → GROUNDED
-    const results = scoreText('The test breaks because the config is missing.');
+    // causality_language weight = 0.30, weightSum = 2.35 → score = 0.30/2.35 ≈ 0.128 → GROUNDED
+    const results = scoreText('The test breaks because the config value is wrong.');
     const causalResult = results.find((r) => r.scores.causality_language === 1);
     expect(causalResult).toBeTruthy();
     expect(causalResult.label).toBe('GROUNDED');
@@ -1205,15 +1208,16 @@ describe('block reason self-trigger regression', () => {
 // DEFAULT_WEIGHTS
 // =============================================================================
 describe('DEFAULT_WEIGHTS', () => {
-  it('contains all six detection categories including evaluative_design_claim and internal_contradiction', () => {
+  it('contains all seven detection categories including evaluative_design_claim, internal_contradiction, and unsupported_absence', () => {
     expect(DEFAULT_WEIGHTS).toHaveProperty('speculation_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('causality_language');
     expect(DEFAULT_WEIGHTS).toHaveProperty('pseudo_quantification');
     expect(DEFAULT_WEIGHTS).toHaveProperty('completeness_claim');
     expect(DEFAULT_WEIGHTS).toHaveProperty('evaluative_design_claim');
     expect(DEFAULT_WEIGHTS).toHaveProperty('internal_contradiction');
+    expect(DEFAULT_WEIGHTS).toHaveProperty('unsupported_absence');
     expect(DEFAULT_WEIGHTS).not.toHaveProperty('fabricated_source');
-    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(6);
+    expect(Object.keys(DEFAULT_WEIGHTS).length).toBe(7);
   });
 
   it('evaluative_design_claim weight is 0.4', () => {
@@ -4001,5 +4005,206 @@ describe('findTriggerMatches internal_contradiction', () => {
     const matches = findTriggerMatches(text, config);
     const contradictionMatches = matches.filter((m) => m.kind === 'internal_contradiction');
     expect(contradictionMatches).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// unsupported_absence — unit and integration tests
+// =============================================================================
+describe('unsupported_absence', () => {
+  // ---------------------------------------------------------------------------
+  // Positive — phrases that must trigger
+  // ---------------------------------------------------------------------------
+  it("flags 'does not exist'", () => {
+    const matches = findTriggerMatches('The function does not exist in this module.');
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches.length).toBeGreaterThan(0);
+    expect(absenceMatches[0].evidence).toMatch(/does not exist/i);
+  });
+
+  it("flags 'there is no'", () => {
+    const matches = findTriggerMatches('There is no config file for this service.');
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches.length).toBeGreaterThan(0);
+    expect(absenceMatches[0].evidence).toMatch(/there is no/i);
+  });
+
+  // 'is not documented' is NOT covered by ABSENCE_CLAIM_RE — verified against
+  // the regex: /\b(?:there\s+is\s+no|there\s+are\s+no|no\s+such|doesn't\s+exist|
+  // does\s+not\s+exist|cannot\s+be\s+found|couldn't\s+find|can't\s+find|
+  // is\s+missing|absence\s+of|no\s+config|no\s+file|no\s+function|no\s+method)\b/gi
+  // Therefore test case 3 is skipped per the spec instructions.
+
+  // ---------------------------------------------------------------------------
+  // Negative — question suppression
+  // ---------------------------------------------------------------------------
+  it('does not flag absence phrase inside a question sentence', () => {
+    // 'Is there is no config...' — the ABSENCE_CLAIM_RE matches 'there is no' at
+    // offset 3, but isIndexWithinQuestion suppresses it because the sentence ends with '?'.
+    const matches = findTriggerMatches('Is there is no config file for this service?');
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Negative — inline-code suppression
+  // ---------------------------------------------------------------------------
+  it('does not flag absence phrase inside inline code backticks', () => {
+    const matches = findTriggerMatches('Use `there is no` in a code comment.');
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches).toHaveLength(0);
+  });
+
+  it('does not flag absence phrase inside a fenced code block', () => {
+    const matches = findTriggerMatches('Example:\n```\nthere is no config\n```\n');
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // hasToolUseInRecentEntries — unit tests
+  // ---------------------------------------------------------------------------
+  it('hasToolUseInRecentEntries returns false for empty array', () => {
+    expect(hasToolUseInRecentEntries([])).toBe(false);
+  });
+
+  it('hasToolUseInRecentEntries returns false when no assistant entries have tool_use', () => {
+    const entries = [
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Hello.' }] },
+      },
+    ];
+    expect(hasToolUseInRecentEntries(entries)).toBe(false);
+  });
+
+  it('hasToolUseInRecentEntries returns true when a recent assistant entry has a tool_use block', () => {
+    const entries = [
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'tu_1', name: 'Read', input: { file_path: '/tmp/x' } },
+            { type: 'text', text: 'Reading the file.' },
+          ],
+        },
+      },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'The function does not exist.' }] },
+      },
+    ];
+    expect(hasToolUseInRecentEntries(entries)).toBe(true);
+  });
+
+  it('hasToolUseInRecentEntries returns false when tool_use is beyond the recentTurns window', () => {
+    // Three assistant entries; tool_use only in the oldest one.
+    // recentTurns=2 so only the last two are inspected — tool_use should not be found.
+    const entries = [
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'tool_use', id: 'tu_old', name: 'Bash', input: {} }],
+        },
+      },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Turn 2, text only.' }] },
+      },
+      {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'The function does not exist.' }] },
+      },
+    ];
+    expect(hasToolUseInRecentEntries(entries, 2)).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Integration — post-filter: tool_use in recent transcript suppresses block
+  // ---------------------------------------------------------------------------
+  describe('integration — tool_use in recent transcript suppresses unsupported_absence block', () => {
+    let tmpFile;
+
+    afterEach(() => {
+      if (tmpFile && fs.existsSync(tmpFile)) {
+        fs.unlinkSync(tmpFile);
+      }
+      tmpFile = undefined;
+    });
+
+    it('does NOT block when a preceding assistant turn has tool_use content', () => {
+      // Turn N-1: assistant with a tool_use block (e.g. a Read call).
+      // Turn N: assistant asserts absence without evidence.
+      // The post-filter in main() sees recent tool use and drops unsupported_absence.
+      const turnWithToolUse = JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'tu_1', name: 'Read', input: { file_path: '/tmp/foo' } },
+          ],
+        },
+      });
+      const turnWithAbsenceClaim = JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'The function does not exist in this module.' }],
+        },
+      });
+      tmpFile = path.join(
+        os.tmpdir(),
+        `hd-absence-tooluse-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+      );
+      fs.writeFileSync(tmpFile, `${turnWithToolUse}\n${turnWithAbsenceClaim}\n`, 'utf-8');
+
+      const { stdout } = runHook({
+        session_id: `test-absence-tooluse-${Date.now()}`,
+        transcript_path: tmpFile,
+        stop_hook_active: false,
+        hook_event_name: 'Stop',
+      });
+
+      // Empty stdout means the hook allowed the stop (no block).
+      const parsed = stdout.trim() ? JSON.parse(stdout) : null;
+      if (parsed !== null) {
+        // If the hook emitted output, it must not be a block for unsupported_absence.
+        const reason = parsed.reason ?? '';
+        expect(reason).not.toContain('unsupported_absence');
+      }
+    });
+
+    it('blocks when the preceding assistant turn has only text content (no tool_use)', () => {
+      // Turn N-1: assistant text only — no tool use.
+      // Turn N: assistant asserts absence without evidence.
+      // The post-filter does NOT remove the match; the hook should block.
+      const turnTextOnly = JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'I reviewed the module structure.' }],
+        },
+      });
+      const turnWithAbsenceClaim = JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'The function does not exist in this module.' }],
+        },
+      });
+      tmpFile = path.join(
+        os.tmpdir(),
+        `hd-absence-notools-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
+      );
+      fs.writeFileSync(tmpFile, `${turnTextOnly}\n${turnWithAbsenceClaim}\n`, 'utf-8');
+
+      const { stdout } = runHook({
+        session_id: `test-absence-notools-${Date.now()}`,
+        transcript_path: tmpFile,
+        stop_hook_active: false,
+        hook_event_name: 'Stop',
+      });
+
+      expect(stdout.trim()).not.toBe('');
+      const parsed = JSON.parse(stdout);
+      expect(parsed.decision).toBe('block');
+      expect(parsed.reason).toContain('unsupported_absence');
+    });
   });
 });
