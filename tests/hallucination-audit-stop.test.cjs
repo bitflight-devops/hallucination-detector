@@ -1781,7 +1781,7 @@ describe('stale message re-scan — full transcript replay', () => {
       os.tmpdir(),
       `hd-full-replay-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`,
     );
-    fs.writeFileSync(tmpFile, VERBATIM_JSONL_LINES.join('\n') + '\n', 'utf-8');
+    fs.writeFileSync(tmpFile, `${VERBATIM_JSONL_LINES.join('\n')}\n`, 'utf-8');
   });
 
   afterEach(() => {
@@ -1794,7 +1794,7 @@ describe('stale message re-scan — full transcript replay', () => {
   it('sanity: last assistant entry in fixture (line 135) contains "i think"', () => {
     // With line 140 absent, line 135 is the last assistant entry.
     // Confirm it is the stale trigger source.
-    const entries = parseJsonl(VERBATIM_JSONL_LINES.join('\n') + '\n');
+    const entries = parseJsonl(`${VERBATIM_JSONL_LINES.join('\n')}\n`);
     const lastText = getLastAssistantText(entries);
     expect(lastText.toLowerCase()).toContain('i think');
   });
