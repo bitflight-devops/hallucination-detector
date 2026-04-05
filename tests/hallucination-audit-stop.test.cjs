@@ -35,6 +35,8 @@ const {
   stripNegationMarkers,
   detectInternalContradictions,
   hasToolUseInRecentEntries,
+  isPrescriptiveAbsence,
+  isWithinVerifiedSection,
 } = require('../scripts/hallucination-audit-stop.cjs');
 
 const SCRIPT_PATH = path.resolve(__dirname, '../scripts/hallucination-audit-stop.cjs');
@@ -4209,6 +4211,119 @@ describe('unsupported_absence', () => {
       expect(parsed.decision).toBe('block');
       expect(parsed.reason).toContain('unsupported_absence');
     });
+  });
+});
+
+// =============================================================================
+// unsupported_absence suppression — isPrescriptiveAbsence + isWithinVerifiedSection
+// =============================================================================
+describe('unsupported_absence suppression', () => {
+  // ---------------------------------------------------------------------------
+  // isPrescriptiveAbsence — passive-voice prescription
+  // ---------------------------------------------------------------------------
+  it('does not flag passive-voice prescription: "No file is written to ~/.dh/plan/"', () => {
+    const text = 'No file is written to ~/.dh/plan/';
+    const matches = findTriggerMatches(text);
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches).toHaveLength(0);
+  });
+
+  it('does not flag passive-voice prescription: "No request is made to the external API"', () => {
+    const text = 'No request is made to the external API';
+    const matches = findTriggerMatches(text);
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches).toHaveLength(0);
+  });
+
+  it('does not flag absence phrase inside a checkbox list item', () => {
+    const text = '- [ ] No output should be produced';
+    const matches = findTriggerMatches(text);
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches).toHaveLength(0);
+  });
+
+  it('does not flag absence phrase inside a bare list item', () => {
+    const text = '- No file write.';
+    const matches = findTriggerMatches(text);
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // isWithinVerifiedSection — structured response suppression
+  // ---------------------------------------------------------------------------
+  it('does not flag absence claim within a bare VERIFIED section', () => {
+    const text = 'VERIFIED\n- No discovery mechanism exists in this version';
+    const matches = findTriggerMatches(text);
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches).toHaveLength(0);
+  });
+
+  it('does not flag absence claim within a bracketed [VERIFIED] section', () => {
+    const text = '[VERIFIED]\nNo search tool is in the tool list';
+    const matches = findTriggerMatches(text);
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // isPrescriptiveAbsence unit — direct helper tests
+  // ---------------------------------------------------------------------------
+  it('isPrescriptiveAbsence returns true for passive-voice prescription sentence', () => {
+    const text = 'No file is written to ~/.dh/plan/';
+    expect(isPrescriptiveAbsence('No file', text, 0)).toBe(true);
+  });
+
+  it('isPrescriptiveAbsence returns true when match is inside a bullet list item', () => {
+    const text = '- No output should be produced';
+    // idx 2 puts us past the "- " so the preceding window contains the bullet
+    expect(isPrescriptiveAbsence('No output', text, 2)).toBe(true);
+  });
+
+  it('isPrescriptiveAbsence returns false for plain prose absence claim', () => {
+    const text = 'There is no error handling in this function.';
+    expect(isPrescriptiveAbsence('no error handling', text, 10)).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // isWithinVerifiedSection unit — direct helper tests
+  // ---------------------------------------------------------------------------
+  it('isWithinVerifiedSection returns true when idx is after a VERIFIED header', () => {
+    const text = 'VERIFIED\n- No discovery mechanism exists in this version';
+    const idx = text.indexOf('No discovery');
+    expect(isWithinVerifiedSection(text, idx)).toBe(true);
+  });
+
+  it('isWithinVerifiedSection returns true when idx is after a [VERIFIED] header', () => {
+    const text = '[VERIFIED]\nNo search tool is in the tool list';
+    const idx = text.indexOf('No search');
+    expect(isWithinVerifiedSection(text, idx)).toBe(true);
+  });
+
+  it('isWithinVerifiedSection returns false when idx is after an INFERRED header', () => {
+    const text = 'INFERRED\n- No discovery mechanism exists in this version';
+    const idx = text.indexOf('No discovery');
+    expect(isWithinVerifiedSection(text, idx)).toBe(false);
+  });
+
+  it('isWithinVerifiedSection returns false when there is no section header before idx', () => {
+    const text = 'No discovery mechanism exists in this version';
+    expect(isWithinVerifiedSection(text, 0)).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Genuine absence claims — must still trigger
+  // ---------------------------------------------------------------------------
+  it('still flags ungrounded prose absence claim: "There is no error handling in this function."', () => {
+    const matches = findTriggerMatches('There is no error handling in this function.');
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches.length).toBeGreaterThan(0);
+  });
+
+  it('still flags ungrounded prose absence claim: "No config file exists."', () => {
+    const matches = findTriggerMatches('No config file exists.');
+    const absenceMatches = matches.filter((m) => m.kind === 'unsupported_absence');
+    expect(absenceMatches.length).toBeGreaterThan(0);
   });
 });
 

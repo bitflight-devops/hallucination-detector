@@ -523,14 +523,19 @@ const EVALUATIVE_DESIGN_TELLS_GLOBAL = new RegExp(EVALUATIVE_DESIGN_TELLS.source
  * @returns {boolean} `true` if any evidence marker or inline code is found within the window, `false` otherwise.
  */
 function hasEvidenceNearby(text, idx, rawText, windowSize = 150) {
-  const start = Math.max(0, idx - windowSize);
-  const end = Math.min(text.length, idx + windowSize);
+  // Widen the look-around window for structured responses that contain claim section
+  // headers — evidence citations in long structured responses are often farther away
+  // than the default 150-char window.
+  const isStructured = /\[(?:VERIFIED|CAUSAL)\]|^(?:VERIFIED|CAUSAL)\s*$/m.test(rawText || text);
+  const effectiveWindow = isStructured ? Math.max(windowSize, 400) : windowSize;
+  const start = Math.max(0, idx - effectiveWindow);
+  const end = Math.min(text.length, idx + effectiveWindow);
   const window = text.slice(start, end);
   if (EVIDENCE_MARKERS.some((re) => re.test(window))) return true;
   // Backtick evidence is checked against the original unstripped text around the same position.
   if (rawText) {
-    const rawStart = Math.max(0, idx - windowSize);
-    const rawEnd = Math.min(rawText.length, idx + windowSize);
+    const rawStart = Math.max(0, idx - effectiveWindow);
+    const rawEnd = Math.min(rawText.length, idx + effectiveWindow);
     const rawWindow = rawText.slice(rawStart, rawEnd);
     if (BACKTICK_RE.test(rawWindow)) return true;
   }
@@ -1057,6 +1062,72 @@ function isNegatedParticiple(matchedText, fullText, matchIndex) {
   }
 
   return false;
+}
+
+// Passive-voice prescription pattern: "No [noun] (is|are|will be|...) [verb]"
+// Matches design-intent statements that are prescriptions, not absence claims.
+const PRESCRIPTIVE_PASSIVE_RE =
+  /\bNo\s+\w[\w\s-]*\s+(?:is|are|will\s+be|should\s+be|must\s+be|can\s+be)\s+\w/i;
+
+// List-item context: a bullet marker within 120 chars before the match index.
+const LIST_BULLET_RE = /(?:^|\n)\s*(?:-\s*\[[ xX]\]|-\s|•\s|\*\s)/;
+
+/**
+ * Returns true when the absence phrase at `idx` is used prescriptively rather than
+ * as an ungrounded factual claim. Two cases suppress:
+ *
+ *   A. Passive-voice prescription: "No file is written to ...", "No request is made"
+ *   B. List-item / checkbox context: phrase appears inside a bullet list item
+ *
+ * @param {string} matchStr - The regex match string.
+ * @param {string} haystack - The full (stripped) text being scanned.
+ * @param {number} idx - Character index of the match in haystack.
+ * @returns {boolean} true = suppress the match.
+ */
+function isPrescriptiveAbsence(_matchStr, haystack, idx) {
+  // A. Extract the current sentence and test for passive-voice prescription.
+  const sentenceStart = Math.max(
+    haystack.lastIndexOf('\n', idx - 1) + 1,
+    haystack.lastIndexOf('.', idx - 1) + 1,
+    0,
+  );
+  const sentenceEndDot = haystack.indexOf('.', idx);
+  const sentenceEndNl = haystack.indexOf('\n', idx);
+  let sentenceEnd = haystack.length;
+  if (sentenceEndDot !== -1 && sentenceEndNl !== -1) {
+    sentenceEnd = Math.min(sentenceEndDot, sentenceEndNl);
+  } else if (sentenceEndDot !== -1) {
+    sentenceEnd = sentenceEndDot;
+  } else if (sentenceEndNl !== -1) {
+    sentenceEnd = sentenceEndNl;
+  }
+  const sentence = haystack.slice(sentenceStart, sentenceEnd + 1);
+  if (PRESCRIPTIVE_PASSIVE_RE.test(sentence)) return true;
+
+  // B. Check for a list bullet marker within 120 chars before the match.
+  const preceding = haystack.slice(Math.max(0, idx - 120), idx);
+  if (LIST_BULLET_RE.test(preceding)) return true;
+
+  return false;
+}
+
+/**
+ * Returns true when `idx` falls within a VERIFIED or CAUSAL section in the text.
+ * A section begins on a line that is exactly the label (with or without brackets)
+ * and continues until the next all-caps section header or end of string.
+ *
+ * @param {string} text - The text to inspect (haystack).
+ * @param {number} idx - Character index to test.
+ * @returns {boolean}
+ */
+function isWithinVerifiedSection(text, idx) {
+  const before = text.slice(0, idx);
+  const sectionRe =
+    /^(?:\[?(VERIFIED|CAUSAL|INFERRED|UNKNOWN|SPECULATION|CORRELATED|REJECTED|ANSWER|MEMORY WRITE)\]?)\s*$/gm;
+  const allMatches = [...before.matchAll(sectionRe)];
+  if (allMatches.length === 0) return false;
+  const lastMatch = allMatches[allMatches.length - 1];
+  return lastMatch[1] === 'VERIFIED' || lastMatch[1] === 'CAUSAL';
 }
 
 /**
@@ -1607,6 +1678,8 @@ function findTriggerMatches(text, config = {}) {
         if (isIndexWithinQuestion(haystack, idx)) continue;
         if (hasEnumerationNearby(haystack, idx)) continue;
         if (isNegatedParticiple(m[0], haystack, idx)) continue;
+        if (isPrescriptiveAbsence(m[0], haystack, idx)) continue;
+        if (isWithinVerifiedSection(haystack, idx)) continue;
         matches.push({ kind: 'unsupported_absence', evidence: m[0].trim() });
       }
     }
@@ -2635,6 +2708,8 @@ module.exports = {
   // Absence claim detection exports
   hasToolUseInRecentEntries,
   ABSENCE_CLAIM_RE,
+  isPrescriptiveAbsence,
+  isWithinVerifiedSection,
   // Behavioral assertion detection exports
   BEHAVIORAL_ASSERTION_RE,
 };
