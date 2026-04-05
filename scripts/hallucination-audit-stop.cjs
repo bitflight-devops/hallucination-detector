@@ -1519,7 +1519,7 @@ function findTriggerMatches(text, config = {}) {
         if (isIndexWithinQuestion(haystack, idx)) continue;
         if (hasEnumerationNearby(haystack, idx)) continue;
         if (isNegatedParticiple(m[0], haystack, idx)) continue;
-        matches.push({ kind: 'unsupported_absence', evidence: m[0].trim(), offset: idx });
+        matches.push({ kind: 'unsupported_absence', evidence: m[0].trim() });
       }
     }
     runCustomPatterns('unsupported_absence');
