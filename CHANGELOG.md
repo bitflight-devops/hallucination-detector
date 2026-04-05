@@ -1,3 +1,9 @@
+## [1.14.2](https://github.com/bitflight-devops/hallucination-detector/compare/v1.14.1...v1.14.2) (2026-04-05)
+
+### Bug Fixes
+
+- **detection:** remove spurious offset field from unsupported_absence match objects ([ac6e68e](https://github.com/bitflight-devops/hallucination-detector/commit/ac6e68e47f2865fe1e278f0da121ca0e6960c9c7))
+
 ## [1.14.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.14.0...v1.14.1) (2026-04-05)
 
 ### Bug Fixes
