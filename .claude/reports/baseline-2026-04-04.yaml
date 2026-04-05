@@ -1,0 +1,104 @@
+# Hallucination Detector — Measurement Baseline
+# Captured: 2026-04-04
+# Method: DuckDB audit across all ~/.claude/projects/ JSONL files
+# Source audit: /tmp/hook-block-audit.md
+
+corpus:
+  total_session_files: 8043
+  top_level_sessions: 713
+  subagent_sessions: 7330
+  stop_hook_firings_with_output: 3927
+  stop_hook_firing_rate: '51.2% of all stop events'
+
+blocks:
+  total: 540
+  affected_sessions: 197
+  block_rate_of_firings: '7.0% (540/7665)'
+  top_level_sessions_with_block: 114
+  top_level_block_rate: '16.0% (114/713)'
+
+by_session_type:
+  top_level_orchestrator: 337
+  compact_agent: 119
+  task_subagent: 58
+  aside_question_agent: 20
+  orphan_agent: 6
+
+by_category:
+  speculation_language_sole: 250
+  completeness_claim_sole: 96
+  causality_language_sole: 60
+  internal_contradiction_sole: 41
+  structural_validation: 16
+  multi_category: 25
+  unparseable: 48
+
+top_trigger_phrases:
+  may: 79
+  could_be: 26
+  assume: 21
+  likely: 20
+  because: 16
+  since: 16
+  all_complete: 12
+  should_be: 12
+  fully_implemented: 6
+  fully_groomed: 6
+  all_tests_pass: 3
+
+quality_metrics:
+  estimated_true_positive_rate: '35% (7/20 sampled)'
+  estimated_false_positive_rate: '40% (8/20 sampled)'
+  estimated_impossible_compliance_rate: '25% (5/20 sampled)'
+  total_false_positive_plus_impossible: '65%'
+  single_retry_resolution_rate: '38.6% (76/197 blocked sessions)'
+  sessions_3_plus_blocks: '32.5% (64/197 blocked sessions)'
+  max_blocks_single_session: 14
+  documented_fail_open_limit: 2
+
+active_harms:
+  compact_agent_blocks: 119
+  compact_agent_sessions_affected: 54
+  compact_speculation_language_blocks: 67 # 56.3% of compact blocks
+  fail_open_not_enforced: true # documented limit=2 but sessions show up to 14
+
+# Cost baseline (48 days: 2026-02-15 to 2026-04-04)
+# Source: /tmp/cost-baseline.yaml
+# Pricing: Opus $75/M output, $1.50/M cache_read; Sonnet $15/M output, $0.30/M cache_read
+cost:
+  total_estimated_usd: 73.09
+  data_range_days: 48
+  monthly_run_rate_usd: 45.68 # 73.09 / 48 * 30
+
+  components:
+    blocked_output_cost_usd: 13.76 # output tokens thrown away
+    retry_cache_read_cost_usd: 54.66 # dominant — re-reading 153K cached tokens per retry
+    retry_output_cost_usd: 4.62
+    retry_input_cost_usd: 0.05
+
+  by_model:
+    opus: { blocks: 184, cost_usd: 64.61, pct_of_total: 88 }
+    sonnet: { blocks: 182, cost_usd: 8.36, pct_of_total: 11 }
+    haiku: { blocks: 11, cost_usd: 0.12, pct_of_total: 1 }
+
+  by_category:
+    speculation_language: { blocks: 285, cost_usd: 34.63 } # 47% of cost
+    completeness_claim: { blocks: 101, cost_usd: 13.77 }
+    causality_language: { blocks: 72, cost_usd: 12.43 }
+    internal_contradiction: { blocks: 41, cost_usd: 8.08 }
+    structural_validation: { blocks: 16, cost_usd: 2.51 }
+
+  per_block_average:
+    cost_usd: 0.19
+    retry_cache_read_tokens: 152892 # why cache re-read dominates
+
+  worst_session:
+    id: dfa8310d-4a99-44c0-b583-0c8135f7d651
+    blocks: 14
+    cost_usd: 8.08 # runaway retry loop on Opus
+
+  projected_savings_by_fix:
+    fix_2_compact_exemption_usd: ~8.50 # 119 blocks, mix of models
+    fix_3_narrow_triggers_usd: ~22.00 # ~134 FP blocks, majority on Sonnet
+    fix_1_loop_counter_usd: ~14.00 # eliminates runaway retry sessions
+    total_projected_savings_usd: ~44.50 # ~61% cost reduction
