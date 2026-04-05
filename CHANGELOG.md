@@ -1,3 +1,9 @@
+## [1.15.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.0...v1.15.1) (2026-04-05)
+
+### Bug Fixes
+
+- **detection:** run custom patterns outside hasValidTemplate gate in block 8 ([daf56ba](https://github.com/bitflight-devops/hallucination-detector/commit/daf56ba54ab83d5e2ba9f2144b30e35083c2f12c))
+
 ## [1.15.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.14.2...v1.15.0) (2026-04-05)
 
 ### Features
