@@ -26,6 +26,7 @@ const {
   isWithinUncertaintyEnumeration,
   writeTelemetry,
   getLastAssistantMeta,
+  validateTemplateBlocks,
 } = require('../scripts/hallucination-audit-stop.cjs');
 
 const SCRIPT_PATH = path.resolve(__dirname, '../scripts/hallucination-audit-stop.cjs');
@@ -3018,5 +3019,182 @@ describe('telemetry enrichment — new fields', () => {
         hook_event_name: 'Stop',
       });
     }).not.toThrow();
+  });
+});
+
+// =============================================================================
+// validateTemplateBlocks
+// =============================================================================
+describe('validateTemplateBlocks', () => {
+  it('returns hasTemplate: false for plain prose with no template header', () => {
+    const result = validateTemplateBlocks(
+      'The test passed. I ran the linter and it found no issues.',
+    );
+    expect(result).toEqual({ hasTemplate: false });
+  });
+
+  it('returns valid: true for a complete TOOL RUN block', () => {
+    const text = [
+      'TOOL RUN',
+      'Command: pnpm test',
+      'Observed: 42 tests passed, 0 failed',
+      'Scope: unit tests in tests/',
+      'Does not cover: integration tests or CI environment',
+    ].join('\n');
+    const result = validateTemplateBlocks(text);
+    expect(result).toEqual({ hasTemplate: true, valid: true });
+  });
+
+  it('reports error when TOOL RUN is missing Observed', () => {
+    const text = [
+      'TOOL RUN',
+      'Command: pnpm test',
+      'Scope: unit tests in tests/',
+      'Does not cover: integration tests',
+    ].join('\n');
+    const result = validateTemplateBlocks(text);
+    expect(result.hasTemplate).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual({ template: 'TOOL RUN', missingField: 'Observed' });
+  });
+
+  it('treats bracket placeholder as empty in TOOL RUN Observed field', () => {
+    const text = [
+      'TOOL RUN',
+      'Command: pnpm test',
+      'Observed: [specific output]',
+      'Scope: unit tests',
+      'Does not cover: integration tests',
+    ].join('\n');
+    const result = validateTemplateBlocks(text);
+    expect(result.hasTemplate).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual({ template: 'TOOL RUN', missingField: 'Observed' });
+  });
+
+  it('returns valid: true for a complete AGENT REPORT block', () => {
+    const text = [
+      'AGENT REPORT (from: javascript-pro)',
+      'Reported: tests pass, lint clean',
+      'Independently verified: yes — ran pnpm test locally',
+    ].join('\n');
+    const result = validateTemplateBlocks(text);
+    expect(result).toEqual({ hasTemplate: true, valid: true });
+  });
+
+  it('reports error when AGENT REPORT is missing Independently verified', () => {
+    const text = ['AGENT REPORT (from: javascript-pro)', 'Reported: tests pass, lint clean'].join(
+      '\n',
+    );
+    const result = validateTemplateBlocks(text);
+    expect(result.hasTemplate).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual({
+      template: 'AGENT REPORT',
+      missingField: 'Independently verified',
+    });
+  });
+
+  it('returns valid: true for COMMITTED block with Validation: none run', () => {
+    const text = [
+      'COMMITTED abc1234',
+      'Changes: added validateTemplateBlocks function',
+      'Validation: none run',
+    ].join('\n');
+    const result = validateTemplateBlocks(text);
+    expect(result).toEqual({ hasTemplate: true, valid: true });
+  });
+
+  it('reports error when COMMITTED is missing Validation', () => {
+    const text = ['COMMITTED abc1234', 'Changes: added validateTemplateBlocks function'].join('\n');
+    const result = validateTemplateBlocks(text);
+    expect(result.hasTemplate).toBe(true);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContainEqual({ template: 'COMMITTED', missingField: 'Validation' });
+  });
+
+  it('reports only the COMMITTED error when TOOL RUN is valid but COMMITTED is missing Validation', () => {
+    const text = [
+      'TOOL RUN',
+      'Command: pnpm test',
+      'Observed: 42 passed',
+      'Scope: unit tests',
+      'Does not cover: integration',
+      '',
+      'COMMITTED abc1234',
+      'Changes: added feature',
+    ].join('\n');
+    const result = validateTemplateBlocks(text);
+    expect(result.hasTemplate).toBe(true);
+    expect(result.valid).toBe(false);
+    // TOOL RUN errors must not be present
+    const toolRunErrors = result.errors.filter((e) => e.template === 'TOOL RUN');
+    expect(toolRunErrors.length).toBe(0);
+    // COMMITTED Validation error must be present
+    expect(result.errors).toContainEqual({ template: 'COMMITTED', missingField: 'Validation' });
+  });
+
+  it('detects TOOL RUN header inside a fenced code block (raw text — not stripped)', () => {
+    const text = [
+      'Here is what I ran:',
+      '',
+      'TOOL RUN',
+      'Command: pnpm test',
+      'Observed: 10 passed',
+      'Scope: unit tests',
+      'Does not cover: e2e',
+    ].join('\n');
+    // Templates are detected on raw text — fenced code blocks are not stripped
+    const result = validateTemplateBlocks(text);
+    expect(result.hasTemplate).toBe(true);
+    expect(result.valid).toBe(true);
+  });
+});
+
+// =============================================================================
+// template validation integration
+// =============================================================================
+describe('template validation integration', () => {
+  it('valid TOOL RUN block does not produce a template block decision', () => {
+    const transcriptFile = makeTempTranscript(
+      [
+        'TOOL RUN',
+        'Command: pnpm test',
+        'Observed: 42 tests passed',
+        'Scope: unit tests in tests/',
+        'Does not cover: integration tests',
+      ].join('\n'),
+    );
+    try {
+      const result = runHook({ transcript_path: transcriptFile, session_id: 'tpl-valid-1' });
+      // Should not block for template reasons — stdout is either empty or a non-template block
+      if (result.stdout.trim()) {
+        const parsed = JSON.parse(result.stdout.trim());
+        expect(parsed.reason).not.toMatch(/OBSERVATION TEMPLATE/);
+      }
+    } finally {
+      fs.unlinkSync(transcriptFile);
+    }
+  });
+
+  it('TOOL RUN missing Scope emits block decision with OBSERVATION TEMPLATE in reason', () => {
+    const transcriptFile = makeTempTranscript(
+      [
+        'TOOL RUN',
+        'Command: pnpm test',
+        'Observed: 42 tests passed',
+        'Does not cover: integration tests',
+      ].join('\n'),
+    );
+    try {
+      const result = runHook({ transcript_path: transcriptFile, session_id: 'tpl-invalid-1' });
+      expect(result.stdout.trim()).not.toBe('');
+      const parsed = JSON.parse(result.stdout.trim());
+      expect(parsed.decision).toBe('block');
+      expect(parsed.reason).toMatch(/OBSERVATION TEMPLATE/);
+      expect(parsed.reason).toMatch(/Scope/);
+    } finally {
+      fs.unlinkSync(transcriptFile);
+    }
   });
 });

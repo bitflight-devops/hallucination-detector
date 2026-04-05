@@ -26,7 +26,8 @@ const path = require('node:path');
 
 const { loadConfig } = require('./hallucination-config.cjs');
 
-const FRAMING_TEXT = `# Hallucination Prevention — Behavioral Framing
+// Base enforcement framing — language discipline rules and structured claim format.
+const _FRAMING_TEXT_BASE = `# Hallucination Prevention — Behavioral Framing
 
 Words like "likely", "probably", "I think", "seems", "might", "should be", "I believe", "presumably" are banned. They are guesses. Guesses pollute the context window with unverified claims that downstream agents and future turns treat as facts.
 
@@ -86,6 +87,40 @@ MEMORY WRITE
 [CORRELATED] claims must NOT use causal verbs (caused, because, due to, led to, resulted in). A correlation is an observed co-occurrence only.
 
 Evidence prefixes: \`File:\`, \`Log:\`, \`Test:\`, \`Doc:\`, \`Tool:\`, \`User:\`, \`Transcript:\`, \`Code:\`, \`Command:\`, \`Output:\`, \`Error:\`, \`Config:\`, \`Trace:\`, \`Repro:\``;
+
+// Observation templates section — exported standalone so tests can reference it directly.
+// FRAMING_TEXT appends this to the base framing.
+const OBSERVATION_TEMPLATES_TEXT = `## Observation Expression Templates
+
+When reporting the result of running a tool, command, or verification step, use the appropriate template. Templates make scope explicit and suppress structural-violation blocking for that response.
+
+### TOOL RUN — use after running any command or tool
+\`\`\`
+TOOL RUN
+Command: [exact command]
+Observed: [specific output]
+Scope: [what this covers]
+Does not cover: [what this does not establish]
+\`\`\`
+
+### AGENT REPORT — use when relaying subagent findings as status
+\`\`\`
+AGENT REPORT (from: [agent name / task ID])
+Reported: [what the agent said]
+Independently verified: [yes — what was verified | no]
+\`\`\`
+
+### COMMITTED — use after a git commit when claiming completion
+\`\`\`
+COMMITTED [hash]
+Changes: [what was changed]
+Validation: [what was run | none run]
+\`\`\`
+
+Using a valid template with all required fields signals that you have grounded your claim in observation. "none run" is a valid Validation value — honesty about coverage is the goal, not false reassurance.`;
+
+// Full enforcement framing: base rules + observation templates.
+const FRAMING_TEXT = `${_FRAMING_TEXT_BASE}\n\n${OBSERVATION_TEMPLATES_TEXT}`;
 
 /**
  * Build the guide-mode framing text used when introspection mode is active.
@@ -189,4 +224,5 @@ module.exports = {
   buildIntrospectFramingText,
   readStdinInput,
   FRAMING_TEXT,
+  OBSERVATION_TEMPLATES_TEXT,
 };

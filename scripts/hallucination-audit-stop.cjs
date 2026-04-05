@@ -1516,6 +1516,38 @@ function main() {
   const config = loadConfig();
   const maxBlocks = config.maxBlocksPerSession ?? 2;
 
+  // Template validation: check for observation template blocks before structural
+  // validation. Runs only when the session has not yet exceeded the block limit —
+  // once fail-open fires, we skip all validation to avoid infinite loops.
+  const templateResult = validateTemplateBlocks(lastAssistantText);
+
+  // hasValidTemplate is declared for Phase 3c (ungrounded_behavioral_assertion suppression).
+  // Currently not acted upon — trigger scan runs regardless of template presence.
+  const hasValidTemplate = templateResult.hasTemplate === true && templateResult.valid === true;
+  void hasValidTemplate; // Phase 3c will use this
+
+  const { data: loopStateData } = loadLoopState(sessionId);
+  const currentBlockCount = Number(loopStateData.blocks || 0);
+  if (currentBlockCount < maxBlocks && templateResult.hasTemplate && !templateResult.valid) {
+    const fieldList = templateResult.errors
+      .map((e) => `${e.template}: missing required field '${e.missingField}'`)
+      .join('; ');
+    const reason = `OBSERVATION TEMPLATE: Required fields missing — ${fieldList}. Fill in all fields or remove the template header.`;
+    writeTelemetry({
+      session_id: sessionId,
+      project_dir: projectDir,
+      model: assistantMeta.model,
+      event_type: 'block',
+      categories: ['template_validation_error'],
+      response_snippet: lastAssistantText.slice(0, 300),
+      stop_hook_active: stopHookActive ? 1 : 0,
+      permission_mode: permissionMode,
+      hook_event_name: hookEventName,
+    });
+    process.stdout.write(`${JSON.stringify({ decision: 'block', reason })}\n`);
+    process.exit(0);
+  }
+
   // Two-layer combined detection: collect structural errors and trigger matches
   // in a single pass before deciding whether to block. This prevents the
   // consecutive-block UX problem where the assistant fixes structural errors,
@@ -1631,6 +1663,111 @@ function main() {
   });
 }
 
+// =============================================================================
+// Observation template validation
+// =============================================================================
+
+/**
+ * Required fields for each observation template type.
+ * Values are the field label strings (without the trailing colon).
+ */
+const TEMPLATE_REQUIRED_FIELDS = {
+  'TOOL RUN': ['Command', 'Observed', 'Scope', 'Does not cover'],
+  'AGENT REPORT': ['Reported', 'Independently verified'],
+  COMMITTED: ['Changes', 'Validation'],
+};
+
+/**
+ * Detect observation template headers in raw response text and validate that
+ * all required fields are present with non-empty, non-placeholder values.
+ *
+ * Operates on raw (non-stripped) text so that templates in prose are found.
+ * Templates inside fenced code blocks are intentionally still detected — when
+ * a response contains a template header followed by the required fields, it
+ * signals an observation claim regardless of surrounding markdown.
+ *
+ * @param {string} text - Raw assistant response text.
+ * @returns {{ hasTemplate: false } |
+ *           { hasTemplate: true, valid: true } |
+ *           { hasTemplate: true, valid: false, errors: Array<{ template: string, missingField: string }> }}
+ */
+function validateTemplateBlocks(text) {
+  const PLACEHOLDER_RE = /^\s*\[.*\]\s*$/; // value is only a [...] placeholder
+
+  /**
+   * Extract the block of text starting at `headerLine` up to the next blank
+   * line or end of text.
+   *
+   * @param {string[]} lines - All lines of `text`.
+   * @param {number} headerIdx - Index of the header line.
+   * @returns {string[]} Lines from (and including) the header line to the end of the block.
+   */
+  function extractBlock(lines, headerIdx) {
+    const block = [lines[headerIdx]];
+    for (let i = headerIdx + 1; i < lines.length; i++) {
+      if (lines[i].trim() === '') break;
+      block.push(lines[i]);
+    }
+    return block;
+  }
+
+  /**
+   * Check whether a required field is satisfied within the block.
+   * A field is satisfied when a line starts with `<fieldLabel>:` and the
+   * value after the colon is non-empty and not a placeholder.
+   *
+   * @param {string[]} blockLines
+   * @param {string} fieldLabel
+   * @returns {boolean}
+   */
+  function fieldPresent(blockLines, fieldLabel) {
+    const prefix = `${fieldLabel}:`;
+    for (const line of blockLines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith(prefix)) {
+        const value = trimmed.slice(prefix.length);
+        if (!value.trim() || PLACEHOLDER_RE.test(value)) return false;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const lines = text.split('\n');
+  const errors = [];
+  let hasTemplate = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+
+    // Detect which template header this line matches (if any).
+    let templateName = null;
+    if (trimmed === 'TOOL RUN') {
+      templateName = 'TOOL RUN';
+    } else if (/^AGENT REPORT/.test(trimmed)) {
+      templateName = 'AGENT REPORT';
+    } else if (/^COMMITTED\s+\S/.test(trimmed) || trimmed === 'COMMITTED') {
+      templateName = 'COMMITTED';
+    }
+
+    if (!templateName) continue;
+
+    hasTemplate = true;
+    const requiredFields = TEMPLATE_REQUIRED_FIELDS[templateName];
+    const block = extractBlock(lines, i);
+
+    for (const field of requiredFields) {
+      if (!fieldPresent(block, field)) {
+        errors.push({ template: templateName, missingField: field });
+      }
+    }
+  }
+
+  if (!hasTemplate) return { hasTemplate: false };
+  if (errors.length === 0) return { hasTemplate: true, valid: true };
+  return { hasTemplate: true, valid: false, errors };
+}
+
 // Export internals for testing; run main() only when executed directly.
 if (require.main === module) {
   main();
@@ -1674,4 +1811,6 @@ module.exports = {
   writeTelemetry,
   getLastAssistantMeta,
   TELEMETRY_DB_PATH,
+  // Observation template validation
+  validateTemplateBlocks,
 };
