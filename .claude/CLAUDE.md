@@ -283,6 +283,19 @@ For adding a new claim structure check (Layer 1):
 
 The `.gitignore` ignores `.claude/` by default but has explicit exceptions for `agents/`, `rules/`, `skills/`, `commands/`, `scripts/`, and `CLAUDE.md`. Other directories under `.claude/` (caches, local state, worktrees) remain ignored.
 
+### Output directory boundary — enforced rule
+
+**Never write output, reports, telemetry, or design artifacts to `.claude/`.** `.claude/` is Claude Code's internal settings directory. Writing output there triggers security warnings and creates ambiguity between tool configuration and project artifacts.
+
+| Output type                          | Correct location                                                                              |
+| ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| Runtime telemetry, audit state, logs | `~/.hd/telemetry/` (e.g. `hallucination-detector.db`, `shadow-log.jsonl`, `audit-state.json`) |
+| Periodic audit results               | `~/.hd/audits/` (e.g. `audit-YYYY-MM-DD.yaml`)                                                |
+| Design artifacts versioned with code | `docs/` in the repo root                                                                      |
+| Session working notes                | `/tmp/` (not committed)                                                                       |
+
+The telemetry database is at `~/.hd/telemetry/hallucination-detector.db`. Audit comparison files go to `~/.hd/audits/`. Design documents that should be version-controlled (baselines, specs, roadmaps) go in `docs/`.
+
 ### Source repo
 
 The agents, rules, skills, and commands in `.claude/` originate from [Jamie-BitFlight/claude_skills](https://github.com/Jamie-BitFlight/claude_skills). To browse or pull updates from the source:

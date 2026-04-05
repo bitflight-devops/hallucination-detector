@@ -84,6 +84,59 @@ function makeTmpProjectDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), `hd-e2e-${Date.now()}-`));
 }
 
+// Static session IDs used across all e2e tests. These must be purged before each
+// test so that stale state files from prior runs do not trigger the fail-open
+// allow-through in blockAndExit (which fires unconditionally when currentBlocks >= limit).
+const E2E_SESSION_IDS = [
+  'e2e-zero-1',
+  'e2e-zero-2',
+  'e2e-zero-3',
+  'e2e-cat-1',
+  'e2e-cat-2',
+  'e2e-cat-3',
+  'e2e-al-1',
+  'e2e-al-2',
+  'e2e-cp-1',
+  'e2e-cp-2',
+  'e2e-cp-3',
+  'e2e-max-1',
+  'e2e-max-2',
+  'e2e-pj-1',
+  'e2e-pj-2',
+  'e2e-pj-3',
+  'e2e-py-1',
+  'e2e-py-2',
+  'e2e-py-3',
+  'e2e-env-1',
+  'e2e-env-2',
+  'e2e-env-3',
+  'e2e-env-4',
+  'e2e-env-5',
+  'e2e-home-1',
+  'e2e-home-2',
+  'e2e-pri-1',
+  'e2e-pri-2',
+  'e2e-pri-3',
+  'e2e-val-1',
+  'e2e-val-2',
+  'e2e-val-3',
+  'e2e-sc-1',
+  'e2e-sc-2',
+  'e2e-sc-3',
+  'e2e-mg-1',
+];
+
+beforeEach(() => {
+  for (const id of E2E_SESSION_IDS) {
+    const stateFile = path.join(os.tmpdir(), `claude-hallucination-audit-${id}.json`);
+    try {
+      fs.unlinkSync(stateFile);
+    } catch {
+      /* not present — ok */
+    }
+  }
+});
+
 afterEach(() => {
   if (tmpDir) {
     try {

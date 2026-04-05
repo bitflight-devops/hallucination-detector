@@ -24,7 +24,7 @@ OPTION_SLUG: {short-identifier-for-filename}
 CONTEXT_PATHS:
   - scripts/hallucination-audit-stop.cjs
   - {any other relevant file paths or doc URLs}
-OUTPUT_PATH: .claude/reports/option-eval-{option-slug}-{YYYYMMDD}.md
+OUTPUT_PATH: ~/.hd/option-eval-{option-slug}-{YYYYMMDD}.md
 ```
 
 Example — evaluating two approaches to sentence splitting:
@@ -38,7 +38,7 @@ CONTEXT_PATHS:
   - scripts/hallucination-audit-stop.cjs
   - tests/hallucination-audit-stop.test.cjs
   - hooks/hooks.json
-OUTPUT_PATH: .claude/reports/option-eval-inline-regex-splitter-20260310.md
+OUTPUT_PATH: ~/.hd/option-eval-inline-regex-splitter-20260310.md
 
 # Agent 2 task
 PROBLEM: Add sentence-level scoring to findTriggerMatches() without breaking the hook contract (stdout must remain empty or valid JSON block).
@@ -48,7 +48,7 @@ CONTEXT_PATHS:
   - scripts/hallucination-audit-stop.cjs
   - tests/hallucination-audit-stop.test.cjs
   - hooks/hooks.json
-OUTPUT_PATH: .claude/reports/option-eval-intl-segmenter-20260310.md
+OUTPUT_PATH: ~/.hd/option-eval-intl-segmenter-20260310.md
 ```
 
 Each agent answers for its option:

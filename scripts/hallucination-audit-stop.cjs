@@ -20,11 +20,220 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { loadConfig, loadWeights, DEFAULT_WEIGHTS } = require('./hallucination-config.cjs');
+// Telemetry: node:sqlite is experimental (Node 22.5+). Wrap in try/catch so the
+// hook continues normally on any Node version that does not support it.
+let DatabaseSync = null;
+let telemetryAvailable = false;
+try {
+  ({ DatabaseSync } = require('node:sqlite'));
+  telemetryAvailable = true;
+} catch {
+  // node:sqlite unavailable — telemetry disabled, hook continues normally
+}
+
+const {
+  loadConfig,
+  loadWeights,
+  DEFAULT_WEIGHTS,
+  DEFAULT_THRESHOLDS,
+} = require('./hallucination-config.cjs');
 const {
   validateClaimStructure,
   CLAIM_LABEL_ALTERNATION,
 } = require('./hallucination-claim-structure.cjs');
+
+// =============================================================================
+// Telemetry
+// =============================================================================
+
+const TELEMETRY_DB_PATH = path.join(os.homedir(), '.hd', 'telemetry', 'hallucination-detector.db');
+const SHADOW_LOG_PATH = path.join(os.homedir(), '.hd', 'telemetry', 'shadow-log.jsonl');
+
+const PRICING = {
+  'claude-opus-4-6': { output: 75 / 1e6, cache_read: 1.5 / 1e6 },
+  'claude-sonnet-4-6': { output: 15 / 1e6, cache_read: 0.3 / 1e6 },
+  'claude-haiku-4-5-20251001': { output: 4 / 1e6, cache_read: 0.08 / 1e6 },
+};
+// Default to sonnet pricing when model is unknown or not in PRICING map.
+const DEFAULT_PRICING = PRICING['claude-sonnet-4-6'];
+
+/** Module-level DB connection — opened once, reused across writeTelemetry calls. */
+let _telemetryDb = null;
+
+/**
+ * Open (or return the cached) telemetry DB connection.
+ * Returns null on any failure so callers can detect unavailability.
+ *
+ * @returns {object|null}
+ */
+function getTelemetryDb() {
+  if (_telemetryDb) return _telemetryDb;
+  try {
+    fs.mkdirSync(path.dirname(TELEMETRY_DB_PATH), { recursive: true });
+    const db = new DatabaseSync(TELEMETRY_DB_PATH);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS hook_events (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts                 INTEGER NOT NULL,
+        session_id         TEXT    NOT NULL,
+        project_dir        TEXT,
+        model              TEXT,
+        event_type         TEXT    NOT NULL,
+        categories         TEXT,
+        evidence           TEXT,
+        error_codes        TEXT,
+        output_tokens      INTEGER,
+        cache_read_tokens  INTEGER,
+        estimated_cost_usd REAL,
+        response_snippet   TEXT,
+        retry_count        INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_ts         ON hook_events(ts);
+      CREATE INDEX IF NOT EXISTS idx_session_id ON hook_events(session_id);
+      CREATE INDEX IF NOT EXISTS idx_event_type ON hook_events(event_type);
+    `);
+    // Migrate existing databases that predate these columns.
+    // SQLite does not support ADD COLUMN IF NOT EXISTS — use try/catch per column.
+    try {
+      db.exec('ALTER TABLE hook_events ADD COLUMN stop_hook_active INTEGER');
+    } catch {
+      /* column already exists */
+    }
+    try {
+      db.exec('ALTER TABLE hook_events ADD COLUMN permission_mode TEXT');
+    } catch {
+      /* column already exists */
+    }
+    try {
+      db.exec('ALTER TABLE hook_events ADD COLUMN hook_event_name TEXT');
+    } catch {
+      /* column already exists */
+    }
+    _telemetryDb = db;
+    return db;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write a single telemetry event record. Silent on any failure.
+ *
+ * @param {object} event
+ * @param {string}   event.event_type
+ * @param {string}   event.session_id
+ * @param {string}   [event.project_dir]
+ * @param {string}   [event.model]
+ * @param {string[]} [event.categories]
+ * @param {string[]} [event.evidence]
+ * @param {string[]} [event.error_codes]
+ * @param {number}   [event.output_tokens]
+ * @param {number}   [event.cache_read_tokens]
+ * @param {string}   [event.response_snippet]
+ * @param {number}   [event.retry_count]
+ * @param {number}   [event.stop_hook_active] - 1 if stop_hook_active was true, 0 otherwise
+ * @param {string}   [event.permission_mode]
+ * @param {string}   [event.hook_event_name]
+ */
+function writeTelemetry(event) {
+  if (!telemetryAvailable) return;
+  try {
+    const db = getTelemetryDb();
+    if (!db) return;
+
+    const model = event.model || 'unknown';
+    const pricing = PRICING[model] || DEFAULT_PRICING;
+    const outputTokens = event.output_tokens || 0;
+    const cacheReadTokens = event.cache_read_tokens || 0;
+    const estimatedCost = outputTokens * pricing.output + cacheReadTokens * pricing.cache_read;
+
+    const stmt = db.prepare(`
+      INSERT INTO hook_events (
+        ts, session_id, project_dir, model, event_type,
+        categories, evidence, error_codes,
+        output_tokens, cache_read_tokens, estimated_cost_usd,
+        response_snippet, retry_count,
+        stop_hook_active, permission_mode, hook_event_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      Date.now(),
+      event.session_id || '',
+      event.project_dir || null,
+      model,
+      event.event_type,
+      event.categories ? JSON.stringify(event.categories) : null,
+      event.evidence ? JSON.stringify(event.evidence) : null,
+      event.error_codes ? JSON.stringify(event.error_codes) : null,
+      outputTokens || null,
+      cacheReadTokens || null,
+      estimatedCost > 0 ? estimatedCost : null,
+      event.response_snippet || null,
+      event.retry_count ?? null,
+      event.stop_hook_active ?? null,
+      event.permission_mode || null,
+      event.hook_event_name || null,
+    );
+  } catch {
+    // intentionally silent — telemetry failure must not affect hook behavior
+  }
+}
+
+/**
+ * Append a single shadow-mode event to the shadow log JSONL file.
+ * Used when dryRun: true — records would-block decisions without actually blocking.
+ * Silent on any failure (same pattern as writeTelemetry).
+ *
+ * @param {object} event
+ * @param {string}   event.sessionId
+ * @param {string}   [event.model]
+ * @param {string[]} [event.categories]
+ * @param {string}   [event.evidence]
+ * @param {string}   [event.responseSnippet]
+ */
+function writeShadowLog(event) {
+  try {
+    const dir = path.dirname(SHADOW_LOG_PATH);
+    fs.mkdirSync(dir, { recursive: true });
+    const record = {
+      ts: Date.now(),
+      session_id: event.sessionId || '',
+      model: event.model || 'unknown',
+      categories: Array.isArray(event.categories) ? event.categories : [],
+      evidence: event.evidence || '',
+      response_snippet: event.responseSnippet || '',
+      dry_run: true,
+    };
+    fs.appendFileSync(SHADOW_LOG_PATH, `${JSON.stringify(record)}\n`, 'utf-8');
+  } catch {
+    // intentionally silent — shadow log failure must not affect hook behavior
+  }
+}
+
+/**
+ * Extract model name and token usage from the last assistant entry in transcript entries.
+ * Scans the last 20 entries (from the end) for an assistant record with a model field.
+ *
+ * @param {object[]} entries - Parsed JSONL entries
+ * @returns {{ model: string, output_tokens: number, cache_read_tokens: number }}
+ */
+function getLastAssistantMeta(entries) {
+  const result = { model: 'unknown', output_tokens: 0, cache_read_tokens: 0 };
+  const slice = entries.slice(-20);
+  for (let i = slice.length - 1; i >= 0; i--) {
+    const entry = slice[i];
+    if (!entry || entry.type !== 'assistant') continue;
+    const msg = entry.message;
+    if (!msg) continue;
+    if (typeof msg.model === 'string' && msg.model) result.model = msg.model;
+    if (msg.usage) {
+      result.output_tokens = msg.usage.output_tokens || 0;
+      result.cache_read_tokens = msg.usage.cache_read_input_tokens || 0;
+    }
+    break;
+  }
+  return result;
+}
 
 function readStdinJson() {
   try {
@@ -41,6 +250,66 @@ function safeReadFileText(filePath) {
   } catch {
     return '';
   }
+}
+
+// Compaction directive patterns. When the first human-role message in the transcript
+// matches any of these, the session is a compact agent session and must be exempted
+// from all trigger detection. Compact agents summarize prior conversation content —
+// they cannot rephrase words like "may", "because", "since" that appear in the
+// conversation they are summarizing.
+const COMPACT_DIRECTIVE_PATTERNS = [
+  // Explicit compaction instruction tags
+  /<compaction_instructions>/i,
+  /\bcompaction\b/i,
+  // Task-based phrasing
+  /your task is to create a\b.{0,80}\bsummar/i,
+  // Context window summary requests
+  /\bcontext window\b.{0,80}\bsummar/i,
+  // Direct summarization imperatives
+  /\bsummariz[e]?\s+(?:the\s+)?conversation\b/i,
+  /\bsummariz[e]?\s+this\s+conversation\b/i,
+  // Condense phrasing
+  /\bcondense\b.{0,80}\bconversation\b/i,
+];
+
+/**
+ * Return true when the transcript at `transcriptPath` belongs to a compact agent
+ * session — detected by finding the first human-role JSONL record whose text
+ * matches one of COMPACT_DIRECTIVE_PATTERNS.
+ *
+ * Reads only the first 5 JSONL lines for performance.
+ *
+ * @param {string} transcriptPath
+ * @returns {boolean}
+ */
+function isCompactAgentSession(transcriptPath) {
+  if (!transcriptPath) return false;
+  let raw;
+  try {
+    raw = fs.readFileSync(transcriptPath, 'utf-8');
+  } catch {
+    return false;
+  }
+  const lines = raw.split('\n');
+  let checked = 0;
+  for (const line of lines) {
+    if (checked >= 5) break;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    checked++;
+    let record;
+    try {
+      record = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    // Match human/user role entries only
+    const role = record.role ?? record.type;
+    if (role !== 'user' && role !== 'human') continue;
+    const text = extractTextFromMessageContent(record.content ?? record.message?.content ?? '');
+    if (COMPACT_DIRECTIVE_PATTERNS.some((re) => re.test(text))) return true;
+  }
+  return false;
 }
 
 function parseJsonl(text) {
@@ -113,8 +382,17 @@ function stripLowSignalRegions(text) {
   // We only enforce these language rules on the assistant's narrative assertions.
   let out = text;
 
-  // Remove fenced code blocks.
+  // Remove backtick fenced code blocks.
   out = out.replace(/```[\s\S]*?```/g, '');
+
+  // Remove tilde fenced code blocks (closed).
+  out = out.replace(/~~~[^\n]*\n[\s\S]*?~~~/g, '');
+
+  // Remove unclosed tilde fences (fence opens but file ends before closing).
+  const unclosedTildeIdx = out.indexOf('~~~');
+  if (unclosedTildeIdx !== -1) {
+    out = out.slice(0, unclosedTildeIdx);
+  }
 
   // Remove inline code spans.
   out = out.replace(/`[^`\n]*`/g, '');
@@ -203,6 +481,72 @@ function isIndexWithinQuestion(text, idx) {
   return segment.includes('?');
 }
 
+/**
+ * Extract the sentence containing the character at `index` from `text`.
+ * Sentence boundaries: '.', '!', '?', '\n\n', or start/end of string.
+ * A '.' followed immediately by a word character is treated as an intra-token
+ * dot (file extension, decimal, URL segment) and is NOT a sentence boundary.
+ * Returns the sentence as a string.
+ */
+function getSentenceContaining(text, index) {
+  // Find start: walk back to previous sentence-ending punctuation or start.
+  // Skip dots that are immediately followed by a word character (intra-token dots).
+  let start = index;
+  while (start > 0) {
+    const prev = text[start - 1];
+    if (!/[.!?\n]/.test(prev)) {
+      start--;
+      continue;
+    }
+    // It is a punctuation char — check if it's an intra-token dot.
+    if (prev === '.' && start < text.length && /\w/.test(text[start])) {
+      // Dot followed by word char: part of a file extension or similar — keep walking.
+      start--;
+      continue;
+    }
+    break;
+  }
+
+  // Find end: walk forward to next sentence-ending punctuation or end.
+  // Skip dots immediately followed by a word character (intra-token dots).
+  let end = index;
+  while (end < text.length) {
+    if (text[end] === '\n' && text[end + 1] === '\n') break;
+    if (/[!?]/.test(text[end])) break;
+    if (text[end] === '.') {
+      // Dot followed by word char: intra-token, skip.
+      if (end + 1 < text.length && /\w/.test(text[end + 1])) {
+        end++;
+        continue;
+      }
+      break;
+    }
+    end++;
+  }
+  return text.slice(start, end + 1).trim();
+}
+
+// File-extension pattern for hasSentenceCodeReference — compiled once at module scope.
+const SENTENCE_FILE_EXT_RE = /\b[\w./-]+\.(cjs|mjs|js|ts|py|json|yaml|yml|md|sh|rb|go|rs)\b/;
+// Function-call pattern (word followed by open paren).
+const SENTENCE_FUNC_CALL_RE = /\b\w+\s*\(/;
+// Line-number reference: "line 17" or ":42" style.
+const SENTENCE_LINE_NUM_RE = /\bline\s+\d+\b|:\d+\b/i;
+
+/**
+ * Returns true if the sentence containing `index` in `text` contains any
+ * code reference signal: file path, function call, line number, or backtick.
+ */
+function hasSentenceCodeReference(text, index) {
+  const sentence = getSentenceContaining(text, index);
+  return (
+    SENTENCE_FILE_EXT_RE.test(sentence) ||
+    SENTENCE_FUNC_CALL_RE.test(sentence) ||
+    SENTENCE_LINE_NUM_RE.test(sentence) ||
+    sentence.includes('`')
+  );
+}
+
 // Change 4: isQualityScore — distinguishes genuine quality ratings from ratios/counts.
 function isQualityScore(text, matchStr, matchIndex) {
   const [numStr] = matchStr.split('/');
@@ -258,6 +602,282 @@ function hasEnumerationNearby(text, idx) {
   const preceding = text.slice(start, idx);
   const allMatches = preceding.match(LIST_ITEM_RE);
   return allMatches !== null && allMatches.length >= 2;
+}
+
+// =============================================================================
+// Internal contradiction detection helpers
+// =============================================================================
+
+/**
+ * Common English stop words filtered out before stemming and Jaccard comparison.
+ * Includes articles, prepositions, pronouns, auxiliaries, and conjunctions.
+ */
+const INTERNAL_CONTRADICTION_STOP_WORDS = new Set([
+  'a',
+  'an',
+  'the',
+  'and',
+  'but',
+  'or',
+  'nor',
+  'so',
+  'yet',
+  'for',
+  'of',
+  'in',
+  'on',
+  'at',
+  'to',
+  'up',
+  'as',
+  'by',
+  'is',
+  'it',
+  'its',
+  'be',
+  'was',
+  'are',
+  'were',
+  'been',
+  'being',
+  'has',
+  'have',
+  'had',
+  'do',
+  'does',
+  'did',
+  'will',
+  'would',
+  'shall',
+  'should',
+  'may',
+  'might',
+  'must',
+  'can',
+  'could',
+  'that',
+  'this',
+  'these',
+  'those',
+  'than',
+  'then',
+  'when',
+  'where',
+  'who',
+  'which',
+  'what',
+  'how',
+  'if',
+  'with',
+  'from',
+  'into',
+  'onto',
+  'upon',
+  'about',
+  'above',
+  'after',
+  'before',
+  'between',
+  'through',
+  'during',
+  'he',
+  'she',
+  'they',
+  'we',
+  'you',
+  'i',
+  'me',
+  'him',
+  'her',
+  'us',
+  'them',
+  'my',
+  'your',
+  'his',
+  'our',
+  'their',
+  'all',
+  'any',
+  'each',
+  'every',
+  'not',
+  'no',
+  'never',
+  'also',
+  'just',
+  'only',
+  'very',
+  'more',
+  'most',
+  'own',
+  'same',
+  'such',
+  'too',
+  'both',
+  'few',
+  'other',
+  'some',
+  'out',
+]);
+
+/** Regex matching negation markers used to classify sentences as negated/affirmative. */
+const NEGATION_POLARITY_RE = /\b(?:not|never|no(?:ne|body|thing|where)?|\w+n't)\b/i;
+
+/** Consonant pairs that legitimately appear doubled in base forms; preserved during stemming. */
+const LEGIT_DOUBLES = new Set(['ss', 'll', 'ff', 'zz']);
+
+/**
+ * Lightweight suffix stripper that normalizes word forms.
+ * After stripping `-ing`, collapses doubled final consonants (e.g., "runn" → "run").
+ *
+ * @param {string} word - Lowercase word.
+ * @returns {string} Stemmed form.
+ */
+function stemWord(word) {
+  if (word.length <= 3) return word;
+
+  // Strip common suffixes in specificity order.
+  let result = word;
+  if (result.endsWith('ing') && result.length > 5) {
+    result = result.slice(0, -3);
+    // Collapse doubled final consonant introduced by suffix removal (e.g., "runn" → "run").
+    // Exception: consonant pairs that legitimately appear doubled in base forms are preserved.
+    if (result.length >= 3 && result[result.length - 1] === result[result.length - 2]) {
+      const doubled = result.slice(-2);
+      if (!LEGIT_DOUBLES.has(doubled)) {
+        result = result.slice(0, -1);
+      }
+    }
+    return result;
+  }
+  if (result.endsWith('tion') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ness') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ment') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ible') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('able') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ical') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ized') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ised') && result.length > 6) return result.slice(0, -4);
+  if (result.endsWith('ful') && result.length > 5) return result.slice(0, -3);
+  if (result.endsWith('ous') && result.length > 5) return result.slice(0, -3);
+  if (result.endsWith('ive') && result.length > 5) return result.slice(0, -3);
+  if (result.endsWith('ies') && result.length > 5) return `${result.slice(0, -3)}y`;
+  if (result.endsWith('ied') && result.length > 5) return `${result.slice(0, -3)}y`;
+  if (result.endsWith('ed') && result.length > 4) return result.slice(0, -2);
+  if (result.endsWith('er') && result.length > 4) return result.slice(0, -2);
+  if (result.endsWith('ly') && result.length > 4) return result.slice(0, -2);
+  if (result.endsWith('es') && result.length > 4) return result.slice(0, -2);
+  if (result.endsWith('s') && result.length > 3) return result.slice(0, -1);
+
+  return result;
+}
+
+/**
+ * Extract significant terms from a sentence: lowercase, filter stop words, apply stemWord.
+ *
+ * @param {string} sentence
+ * @returns {string[]} Array of stemmed significant tokens.
+ */
+function extractSignificantTerms(sentence) {
+  return sentence
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((w) => w.length >= 3 && !INTERNAL_CONTRADICTION_STOP_WORDS.has(w))
+    .map(stemWord);
+}
+
+/**
+ * Remove negation markers from a sentence for term-overlap comparison.
+ *
+ * @param {string} sentence
+ * @returns {string}
+ */
+function stripNegationMarkers(sentence) {
+  return sentence
+    .replace(
+      /\b(?:don't|doesn't|didn't|won't|wouldn't|can't|couldn't|shouldn't|isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't)\b/gi,
+      '',
+    )
+    .replace(NEGATION_POLARITY_RE, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * Regex matching sentences that are questions and should be excluded from
+ * contradiction pairing.
+ *
+ * Two heuristics:
+ * 1. Sentence ends with `?` — unambiguous question regardless of how it starts.
+ * 2. Sentence starts with a WH-word (who/what/when/where/why/how) — these words
+ *    almost always head interrogative clauses when they open a sentence.
+ *
+ * Modal/auxiliary starters (can/will/may/is/does/etc.) are intentionally excluded
+ * from the no-`?` branch because they commonly head declaratives
+ * (e.g. "Can be configured…", "May result in…", "Will cause errors…").
+ */
+const QUESTION_SENTENCE_RE = /^\s*(?:who|what|when|where|why|how)\b|[?]\s*$/i;
+
+/**
+ * Returns true when a sentence is a question and should be excluded from
+ * contradiction pairing (questions cannot contradict declarative sentences).
+ *
+ * @param {string} sentence
+ * @returns {boolean}
+ */
+function isQuestionSentence(sentence) {
+  return QUESTION_SENTENCE_RE.test(sentence.trim());
+}
+
+/**
+ * Detect internal contradictions: pairs of affirmative/negated sentences that share
+ * >= 2 significant terms and have Jaccard similarity >= 0.4.
+ *
+ * @param {string} text
+ * @returns {Array<{kind: string, evidence: string}>} Match objects.
+ */
+function detectInternalContradictions(text) {
+  const sentences = splitIntoSentences(stripLowSignalRegions(text));
+  if (sentences.length < 2) return [];
+
+  // Exclude question sentences — they cannot contradict declarative sentences.
+  const declaratives = sentences.filter((s) => !isQuestionSentence(s));
+  if (declaratives.length < 2) return [];
+
+  const classified = declaratives.map((s) => ({
+    text: s,
+    negated: NEGATION_POLARITY_RE.test(s),
+    terms: new Set(extractSignificantTerms(stripNegationMarkers(s))),
+  }));
+
+  const contradictions = [];
+
+  for (let i = 0; i < classified.length; i++) {
+    for (let j = i + 1; j < classified.length; j++) {
+      const a = classified[i];
+      const b = classified[j];
+
+      // One must be negated and the other affirmative.
+      if (a.negated === b.negated) continue;
+
+      // Compute Jaccard similarity on stemmed significant terms.
+      const intersection = new Set([...a.terms].filter((t) => b.terms.has(t)));
+      if (intersection.size < 2) continue;
+
+      const union = new Set([...a.terms, ...b.terms]);
+      const jaccard = intersection.size / union.size;
+      if (jaccard < 0.4) continue;
+
+      const snippetA = a.text.length > 40 ? `${a.text.slice(0, 40)}...` : a.text;
+      const snippetB = b.text.length > 40 ? `${b.text.slice(0, 40)}...` : b.text;
+      contradictions.push({
+        kind: 'internal_contradiction',
+        evidence: `"${snippetA}" vs "${snippetB}"`,
+      });
+    }
+  }
+
+  return contradictions;
 }
 
 /**
@@ -439,7 +1059,36 @@ function findTriggerMatches(text, config = {}) {
         'may',
       ];
       // Pronouns that precede "may" in permissive/instructional usage ("you may use").
-      const PERMISSIVE_MAY_PRONOUNS = new Set(['you', 'one', 'anyone', 'users', 'they', 'we']);
+      const PERMISSIVE_MAY_PRONOUNS = new Set([
+        'you',
+        'one',
+        'anyone',
+        'users',
+        'they',
+        'we',
+        'caller',
+        'clients',
+        'consumers',
+      ]);
+      // Documentation context keywords: when any appear within ±200 chars, "may" is
+      // describing an allowable state, not asserting epistemic uncertainty.
+      const MAY_DOC_CONTEXT_RE =
+        /\b(?:parameter|option|argument|field|value|config|setting|property|attribute|variable)\b/i;
+      // Existential/container "may": describes possible presence of data, not a claim.
+      const MAY_EXISTENTIAL_RE = /\bmay\s+(?:contain|include|be\s+present|exist|appear)\b/i;
+      // Non-epistemic passive constructions: allowable states, not speculation.
+      const MAY_PASSIVE_ALLOWABLE_RE =
+        /\bmay\s+be\s+(?:modified|omitted|skipped|empty|null|undefined|absent|overridden|ignored)\b/i;
+
+      // Suppression phrases for "assume": first-person + will/let operating assumption.
+      const ASSUME_OPERATING_RE =
+        /\b(?:i\s+will\s+assume|i'll\s+assume|let'?s\s+assume|let\s+me\s+assume|i'?m\s+going\s+to\s+assume)\b/i;
+      // Conditional framing: "assuming X, then" / "assuming X—" / "assuming X the"
+      const ASSUME_CONDITIONAL_RE = /\bassuming\s+\S.{0,60}(?:,\s*then\b|—|\s+the\b|\s+this\b)/i;
+      // Clarifying assumption: "assume you want" / "assume the default" / "assume standard"
+      const ASSUME_CLARIFYING_RE =
+        /\bassume\s+(?:you\s+want|the\s+default|standard|conventional)\b/i;
+
       for (const phrase of speculationPhrases) {
         let searchFrom = 0;
         while (true) {
@@ -460,12 +1109,42 @@ function findTriggerMatches(text, config = {}) {
             )
               continue;
           }
-          // Suppress permissive "may" when preceded by a permission-granting pronoun.
+
           if (phrase === 'may') {
+            // Suppress permissive "may" when preceded by a permission-granting pronoun.
             const before = lower.slice(0, idx).trimEnd();
             const lastWord = before.slice(before.lastIndexOf(' ') + 1);
             if (PERMISSIVE_MAY_PRONOUNS.has(lastWord)) continue;
+
+            // Suppress when "may" is in a documentation context (±200 chars contains
+            // parameter/option/argument/field/value/config/setting/property/attribute/variable).
+            const docWindow = haystack.slice(
+              Math.max(0, idx - 200),
+              Math.min(haystack.length, idx + 200),
+            );
+            if (MAY_DOC_CONTEXT_RE.test(docWindow)) continue;
+
+            // Suppress existential/container "may": "may contain", "may include", etc.
+            const mayExistWindow = haystack.slice(idx, Math.min(haystack.length, idx + 60));
+            if (MAY_EXISTENTIAL_RE.test(mayExistWindow)) continue;
+
+            // Suppress non-epistemic passive allowable-state "may": "may be modified", etc.
+            if (MAY_PASSIVE_ALLOWABLE_RE.test(mayExistWindow)) continue;
           }
+
+          if (phrase === 'assume' || phrase === 'i assume') {
+            // Suppress operating-assumption framing ("I will assume", "let's assume", etc.)
+            const assumeWindow = haystack.slice(
+              Math.max(0, idx - 30),
+              Math.min(haystack.length, idx + 60),
+            );
+            if (ASSUME_OPERATING_RE.test(assumeWindow)) continue;
+            // Suppress conditional framing ("assuming X, then" / "assuming X—")
+            if (ASSUME_CONDITIONAL_RE.test(assumeWindow)) continue;
+            // Suppress clarifying assumption ("assume you want", "assume the default")
+            if (ASSUME_CLARIFYING_RE.test(assumeWindow)) continue;
+          }
+
           // Suppress when the phrase appears within an explicit uncertainty enumeration —
           // the assistant is transparently disclosing what it does not know.
           if (isWithinUncertaintyEnumeration(haystack, idx)) continue;
@@ -522,13 +1201,27 @@ function findTriggerMatches(text, config = {}) {
   // Change 2 & 6: Expanded phrase list + evidence suppression.
   if (isCategoryEnabled('causality_language')) {
     if (useBuiltIn('causality_language')) {
-      // Temporal 'since' exclusion (Change 6)
+      // Temporal 'since' exclusion (Change 6) — extended with "since then/that" and
+      // "since we/you/I + past-tense" patterns.
       const TEMPORAL_SINCE =
         /\bsince\s+(?:last\s+)?(?:yesterday|today|then|\d{4}|\d{1,2}[/-]\d{1,2}|\d+\s+(?:minutes?|hours?|days?|weeks?|months?|years?)\s+ago|the\s+(?:beginning|start|end)|version\s+\d)/i;
+      // "since then" / "since that change/commit/update"
+      const TEMPORAL_SINCE_THEN = /\bsince\s+then\b/i;
+      const TEMPORAL_SINCE_THAT = /\bsince\s+that\b/i;
+      // "since we changed", "since I updated", "since you added" — prior action reference
+      const TEMPORAL_SINCE_PRIOR_ACTION = /\bsince\s+(?:we|you|i)\s+[a-z]+ed\b/i;
 
       // Hedged-because pattern (Change 2)
       const HEDGED_BECAUSE =
         /\b(?:probably|likely|possibly|perhaps|maybe|might\s+be|could\s+be)\s+because\b/i;
+      // "because" followed within 50 chars by a file path pattern — grounded citation
+      const BECAUSE_FILE_PATH_RE = /because.{0,50}(?:\/[\w./~-]+|\.\/|~\/|`[^`]+`)/i;
+      // "because of the" + artifact noun — referencing an existing artifact, not guessing
+      const BECAUSE_ARTIFACT_RE =
+        /\bbecause\s+of\s+the\s+(?:output|error|config|file|log|result|test|report)\b/i;
+      // Self-description: "I stopped/exited/skipped/failed because" — describing own action
+      const BECAUSE_SELF_DESCRIPTION_RE =
+        /\bi\s+(?:stopped|exited|skipped|failed|aborted|returned|quit|halted)\s+because\b/i;
 
       const causalityPhrases = [
         'caused by',
@@ -576,6 +1269,9 @@ function findTriggerMatches(text, config = {}) {
               Math.min(haystack.length, idx + 100),
             );
             if (TEMPORAL_SINCE.test(nearby)) continue;
+            if (TEMPORAL_SINCE_THEN.test(nearby)) continue;
+            if (TEMPORAL_SINCE_THAT.test(nearby)) continue;
+            if (TEMPORAL_SINCE_PRIOR_ACTION.test(nearby)) continue;
           }
 
           if (phrase === 'because') {
@@ -584,14 +1280,40 @@ function findTriggerMatches(text, config = {}) {
               matches.push({ kind: 'causality_language', evidence: 'because (hedged)' });
               break; // one flag per hedged-because pattern is sufficient
             }
-            // Evidence nearby suppresses plain 'because'
-            if (hasEvidenceNearby(haystack, idx, rawText)) continue;
+            // "because of the <artifact>" — citing an existing artifact, not guessing
+            if (
+              BECAUSE_ARTIFACT_RE.test(
+                haystack.slice(Math.max(0, idx - 5), Math.min(haystack.length, idx + 80)),
+              )
+            )
+              continue;
+            // Self-description ("I stopped because") — not a causal claim about the world
+            if (
+              BECAUSE_SELF_DESCRIPTION_RE.test(
+                haystack.slice(Math.max(0, idx - 60), Math.min(haystack.length, idx + 20)),
+              )
+            )
+              continue;
+            // "because" followed by a file path within 50 chars — grounded citation
+            if (
+              BECAUSE_FILE_PATH_RE.test(
+                haystack.slice(Math.max(0, idx - 5), Math.min(haystack.length, idx + 60)),
+              )
+            )
+              continue;
+            // Evidence nearby suppresses plain 'because' (expanded window: 300 chars)
+            if (hasEvidenceNearby(haystack, idx, rawText, 300)) continue;
+            // Sentence-scoped code reference suppression: file path, function call,
+            // line number, or backtick in the same sentence — grounded citation.
+            if (hasSentenceCodeReference(rawText, idx)) continue;
             matches.push({ kind: 'causality_language', evidence: phrase });
             continue;
           }
 
           // All other causality phrases: suppress when evidence is nearby
           if (hasEvidenceNearby(haystack, idx, rawText)) continue;
+          // Sentence-scoped code reference suppression for non-because phrases.
+          if (hasSentenceCodeReference(rawText, idx)) continue;
           matches.push({ kind: 'causality_language', evidence: phrase });
           break; // one flag per phrase kind is sufficient for non-because phrases
         }
@@ -617,6 +1339,8 @@ function findTriggerMatches(text, config = {}) {
         for (const m of haystack.matchAll(gRe)) {
           if (isIndexWithinQuestion(haystack, m.index)) continue;
           if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
+          // Sentence-scoped code reference suppression for regex-matched causality patterns.
+          if (hasSentenceCodeReference(rawText, m.index)) continue;
           matches.push({ kind: 'causality_language', evidence: m[0].trim() });
           break;
         }
@@ -630,6 +1354,8 @@ function findTriggerMatches(text, config = {}) {
           if (isIndexWithinQuestion(haystack, m.index)) continue;
           if (DEFINITIONAL_CAUSE_RE.test(haystack.slice(m.index, m.index + 80))) continue;
           if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
+          // Sentence-scoped code reference suppression for regex-matched causality patterns.
+          if (hasSentenceCodeReference(rawText, m.index)) continue;
           matches.push({ kind: 'causality_language', evidence: m[0].trim() });
           break;
         }
@@ -746,6 +1472,16 @@ function findTriggerMatches(text, config = {}) {
     runCustomPatterns('evaluative_design_claim');
   }
 
+  // 6) Internal contradictions: pairs of affirmative/negated sentences with >= 0.4 Jaccard overlap.
+  if (isCategoryEnabled('internal_contradiction')) {
+    if (useBuiltIn('internal_contradiction')) {
+      for (const m of detectInternalContradictions(rawText)) {
+        matches.push(m);
+      }
+    }
+    runCustomPatterns('internal_contradiction');
+  }
+
   // Apply allowlist filter and maxTriggersPerResponse limit.
   const allowlist = Array.isArray(config.allowlist) ? config.allowlist : [];
   const maxTriggers =
@@ -788,10 +1524,16 @@ function splitIntoSentences(text) {
  * for that category is detected in the sentence, otherwise 0.
  *
  * @param {string} sentence - The sentence text to analyze.
+ * @param {object} [config]  - Optional runtime config forwarded to `findTriggerMatches`.
+ *   Supports `config.categories.<name>.enabled`, `config.categories.<name>.customPatterns`,
+ *   `config.categories.<name>.replacePatterns`, and `config.allowlist`.
  * @returns {Object<string, number>} An object mapping category names to `0` or `1`, where `1` indicates the category was triggered in the sentence.
  */
-function scoreSentence(sentence) {
-  const matches = findTriggerMatches(sentence);
+function scoreSentence(sentence, config) {
+  // `internal_contradiction` detection requires >= 2 sentences and always returns []
+  // for a single sentence (early-return in detectInternalContradictions). The call is
+  // a no-op for that category — scores[internal_contradiction] will always be 0 here.
+  const matches = findTriggerMatches(sentence, config);
   const scores = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
   for (const match of matches) {
     if (Object.hasOwn(scores, match.kind)) {
@@ -829,14 +1571,18 @@ function aggregateWeightedScore(scores, weights) {
 }
 
 /**
- * Map an aggregate score to a three-tier label.
- *   GROUNDED     : score < 0.30
- *   UNCERTAIN    : 0.30 <= score <= 0.60
- *   HALLUCINATED : score > 0.60
+ * Map an aggregate score to a three-tier label using configurable thresholds.
+ *   GROUNDED     : score < thresholds.uncertain
+ *   UNCERTAIN    : thresholds.uncertain <= score <= thresholds.hallucinated
+ *   HALLUCINATED : score > thresholds.hallucinated
+ *
+ * @param {number} score - Aggregate score in [0, 1].
+ * @param {object} [thresholds] - Optional threshold overrides. Falls back to DEFAULT_THRESHOLDS.
  */
-function getLabelForScore(score) {
-  if (score < 0.3) return 'GROUNDED';
-  if (score <= 0.6) return 'UNCERTAIN';
+function getLabelForScore(score, thresholds) {
+  const t = thresholds || DEFAULT_THRESHOLDS;
+  if (score < t.uncertain) return 'GROUNDED';
+  if (score <= t.hallucinated) return 'UNCERTAIN';
   return 'HALLUCINATED';
 }
 
@@ -847,16 +1593,19 @@ function getLabelForScore(score) {
  * Returns an array of per-sentence result objects:
  *   { sentence, index, total, scores, aggregateScore, label }
  *
- * @param {string} text     - Input text to analyze.
- * @param {object} [weights] - Optional weight overrides (defaults to DEFAULT_WEIGHTS).
+ * @param {string} text       - Input text to analyze.
+ * @param {object} [weights]  - Optional weight overrides (defaults to DEFAULT_WEIGHTS).
+ * @param {object} [thresholds] - Optional threshold overrides (defaults to DEFAULT_THRESHOLDS).
+ * @param {object} [config]   - Optional runtime config forwarded to `scoreSentence` and
+ *   `findTriggerMatches`. Controls enabled categories, custom patterns, and allowlists.
  */
-function scoreText(text, weights) {
+function scoreText(text, weights, thresholds, config) {
   const sentences = splitIntoSentences(text);
   const total = sentences.length;
   return sentences.map((sentence, index) => {
-    const scores = scoreSentence(sentence);
+    const scores = scoreSentence(sentence, config);
     const aggregateScore = aggregateWeightedScore(scores, weights);
-    const label = getLabelForScore(aggregateScore);
+    const label = getLabelForScore(aggregateScore, thresholds);
     return { sentence, index, total, scores, aggregateScore, label };
   });
 }
@@ -985,18 +1734,37 @@ const BLOCK_HEADER = 'Hallucination-detector STOP HOOK blocked this response.';
  * Apply the loop guard and emit a block decision if the limit has not been reached.
  * Always calls process.exit(0).
  *
+ * The allow-through fires unconditionally once the session block count reaches the
+ * limit — it does NOT require stopHookActive to be true. stopHookActive being false
+ * on the first call of a new turn was the previous bug: the counter accumulated across
+ * turns but the guard was unreachable on first-call-of-turn, producing up to 14 blocks
+ * against the documented limit of 2.
+ *
  * @param {string} sessionId
- * @param {boolean} stopHookActive
  * @param {string} reason
  * @param {number} [maxBlocks] - Maximum number of blocks before allowing through. Defaults to 2.
  */
-function blockAndExit(sessionId, stopHookActive, reason, maxBlocks) {
+/**
+ * @param {string} sessionId
+ * @param {string} reason
+ * @param {number} [maxBlocks]
+ * @param {object} [telemetryCtx] - Optional telemetry context passed to writeTelemetry.
+ * @param {string} [telemetryCtx.event_type] - 'block' or 'structural_block'
+ */
+function blockAndExit(sessionId, reason, maxBlocks, telemetryCtx) {
   const { statePath, data } = loadLoopState(sessionId);
-  const nextBlocks = Number(data.blocks || 0) + 1;
-  saveLoopState(statePath, { blocks: nextBlocks });
+  const currentBlocks = Number(data.blocks || 0);
   const limit = typeof maxBlocks === 'number' && maxBlocks >= 0 ? maxBlocks : 2;
-  if (nextBlocks > limit && stopHookActive) {
+  if (currentBlocks >= limit) {
+    // Already hit the limit in a prior call — allow through unconditionally.
+    if (telemetryCtx) {
+      writeTelemetry({ ...telemetryCtx, event_type: 'fail_open', retry_count: currentBlocks });
+    }
     process.exit(0);
+  }
+  saveLoopState(statePath, { blocks: currentBlocks + 1 });
+  if (telemetryCtx) {
+    writeTelemetry({ ...telemetryCtx, retry_count: currentBlocks });
   }
   emitJson({ decision: 'block', reason });
   process.exit(0);
@@ -1034,15 +1802,17 @@ function buildStructuralBlockReason(errors) {
  * Constructs a human-readable block reason from detected trigger matches.
  *
  * @param {Array<{kind: string, evidence: string}>} matches - Array of match objects; each must have a `kind` label and an `evidence` snippet used in the reason.
+ * @param {Array<{sentence: string, index: number, total: number, aggregateScore: number, label: string}>} [sentenceScores] - Optional per-sentence scoring results from scoreText(). When provided, sentences labeled UNCERTAIN or HALLUCINATED are appended as a sentence-level analysis section.
  * @returns {string} A formatted block reason string suitable for the STOP hook output.
  */
-function buildBlockReason(matches) {
+function buildBlockReason(matches, sentenceScores) {
   const uniqueKinds = [...new Set(matches.map((m) => m.kind))];
   const evidenceSnippets = matches
     .slice(0, 6)
     .map((m) => `- ${m.kind}: \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``)
     .join('\n');
-  return [
+
+  const parts = [
     BLOCK_HEADER,
     '',
     'Detected trigger language in your last assistant message:',
@@ -1057,7 +1827,27 @@ function buildBlockReason(matches) {
     '- If an evaluative label (`cleanest`, `simplest`, `obvious`) appears on a proposed change: state what the changed component protects when functioning correctly before proposing to change it.',
     '',
     `Kinds flagged: ${uniqueKinds.join(', ')}`,
-  ].join('\n');
+  ];
+
+  if (Array.isArray(sentenceScores) && sentenceScores.length > 0) {
+    const flaggedSentences = sentenceScores.filter(
+      (s) => s.label === 'UNCERTAIN' || s.label === 'HALLUCINATED',
+    );
+    if (flaggedSentences.length > 0) {
+      const total = sentenceScores.length;
+      parts.push('');
+      parts.push('Sentence-level analysis:');
+      for (const s of flaggedSentences) {
+        const n = s.index + 1;
+        const raw = s.sentence.replace(/\s+/g, ' ').trim();
+        const snippet = raw.length > 60 ? `${raw.slice(0, 60)}...` : raw;
+        const sanitized = snippet.replace(/`/g, "'");
+        parts.push(`- sentence ${n} of ${total} [${s.label}]: \`${sanitized}\``);
+      }
+    }
+  }
+
+  return parts.join('\n');
 }
 
 /**
@@ -1115,7 +1905,28 @@ function main() {
   const input = readStdinJson();
   const transcriptPath = input.transcript_path || '';
   const sessionId = input.session_id || '';
-  const stopHookActive = Boolean(input.stop_hook_active);
+  const projectDir = input.cwd || null;
+  const stopHookActive = input.stop_hook_active === true;
+  const permissionMode = input.permission_mode || 'default';
+  const hookEventName = input.hook_event_name || 'Stop';
+
+  // Defensive guard: only handle known stop-hook events.
+  if (hookEventName !== 'Stop' && hookEventName !== 'SubagentStop') {
+    process.exit(0);
+  }
+
+  // Compact agent exemption: sessions whose first human message is a compaction
+  // directive are exempted from all detection. Compact agents summarize prior
+  // conversation content verbatim — they cannot avoid flagged phrases that
+  // appear in the conversation being summarized.
+  if (transcriptPath && isCompactAgentSession(transcriptPath)) {
+    writeTelemetry({
+      event_type: 'compact_exempt',
+      session_id: sessionId,
+      project_dir: projectDir,
+    });
+    process.exit(0);
+  }
 
   // Prefer last_assistant_message from stdin: Claude Code provides the current
   // turn's text directly, avoiding the race condition where the transcript is
@@ -1156,8 +1967,45 @@ function main() {
     process.exit(0);
   }
 
+  // Extract model/token metadata for telemetry. When entries were not parsed
+  // (stdin supplied the text directly), entries is empty and getLastAssistantMeta
+  // returns defaults — that is acceptable.
+  const assistantMeta = getLastAssistantMeta(entries);
+
   const config = loadConfig();
   const maxBlocks = config.maxBlocksPerSession ?? 2;
+
+  // Template validation: check for observation template blocks before structural
+  // validation. Runs only when the session has not yet exceeded the block limit —
+  // once fail-open fires, we skip all validation to avoid infinite loops.
+  const templateResult = validateTemplateBlocks(lastAssistantText);
+
+  // hasValidTemplate is declared for Phase 3c (ungrounded_behavioral_assertion suppression).
+  // Currently not acted upon — trigger scan runs regardless of template presence.
+  const hasValidTemplate = templateResult.hasTemplate === true && templateResult.valid === true;
+  void hasValidTemplate; // Phase 3c will use this
+
+  const { data: loopStateData } = loadLoopState(sessionId);
+  const currentBlockCount = Number(loopStateData.blocks || 0);
+  if (currentBlockCount < maxBlocks && templateResult.hasTemplate && !templateResult.valid) {
+    const fieldList = templateResult.errors
+      .map((e) => `${e.template}: missing required field '${e.missingField}'`)
+      .join('; ');
+    const reason = `OBSERVATION TEMPLATE: Required fields missing — ${fieldList}. Fill in all fields or remove the template header.`;
+    writeTelemetry({
+      session_id: sessionId,
+      project_dir: projectDir,
+      model: assistantMeta.model,
+      event_type: 'block',
+      categories: ['template_validation_error'],
+      response_snippet: lastAssistantText.slice(0, 300),
+      stop_hook_active: stopHookActive ? 1 : 0,
+      permission_mode: permissionMode,
+      hook_event_name: hookEventName,
+    });
+    process.stdout.write(`${JSON.stringify({ decision: 'block', reason })}\n`);
+    process.exit(0);
+  }
 
   // Two-layer combined detection: collect structural errors and trigger matches
   // in a single pass before deciding whether to block. This prevents the
@@ -1186,6 +2034,27 @@ function main() {
     triggerMatches = findTriggerMatches(lastAssistantText, config);
   }
 
+  // Base telemetry context shared across all exit paths below.
+  const telemetryBase = {
+    session_id: sessionId,
+    project_dir: projectDir,
+    model: assistantMeta.model,
+    output_tokens: assistantMeta.output_tokens,
+    cache_read_tokens: assistantMeta.cache_read_tokens,
+    response_snippet: lastAssistantText.slice(0, 300),
+    categories:
+      triggerMatches.length > 0
+        ? [...new Set(triggerMatches.map((m) => m.kind))]
+        : structuralErrors.length > 0
+          ? ['structural']
+          : [],
+    evidence: triggerMatches.map((m) => m.evidence),
+    error_codes: structuralErrors.map((e) => e.code),
+    stop_hook_active: stopHookActive ? 1 : 0,
+    permission_mode: permissionMode,
+    hook_event_name: hookEventName,
+  };
+
   if (config.introspect) {
     // Introspection mode: log everything, never block.
     const { statePath, data } = loadLoopState(sessionId);
@@ -1199,7 +2068,7 @@ function main() {
       path.join(os.tmpdir(), 'hallucination-detector-introspect.jsonl');
 
     const wouldBlock = hasIssues && nextBlocks <= maxBlocks;
-    const sentenceScores = scoreText(lastAssistantText, config.weights);
+    const sentenceScores = scoreText(lastAssistantText, config.weights, config.thresholds, config);
 
     const categoryCounts = Object.fromEntries(Object.keys(DEFAULT_WEIGHTS).map((k) => [k, 0]));
     for (const m of triggerMatches) {
@@ -1228,29 +2097,153 @@ function main() {
   if (structuralErrors.length === 0 && triggerMatches.length === 0) {
     const { statePath } = loadLoopState(sessionId);
     saveLoopState(statePath, { blocks: 0 });
+    writeTelemetry({ ...telemetryBase, event_type: 'allow', retry_count: 0 });
     process.exit(0);
   }
 
-  if (structuralErrors.length > 0 && triggerMatches.length > 0) {
-    blockAndExit(
+  // Shadow mode: log would-block decisions without actually blocking.
+  if (config.dryRun) {
+    writeShadowLog({
       sessionId,
-      stopHookActive,
-      buildCombinedBlockReason(structuralErrors, triggerMatches),
-      maxBlocks,
-    );
+      model: assistantMeta.model,
+      categories: telemetryBase.categories,
+      evidence: telemetryBase.evidence.join(', '),
+      responseSnippet: lastAssistantText.slice(0, 300),
+    });
+    process.exit(0);
+  }
+
+  const sentenceScoresForBlock = scoreText(
+    lastAssistantText,
+    config.weights,
+    config.thresholds,
+    config,
+  );
+
+  if (structuralErrors.length > 0 && triggerMatches.length > 0) {
+    blockAndExit(sessionId, buildCombinedBlockReason(structuralErrors, triggerMatches), maxBlocks, {
+      ...telemetryBase,
+      event_type: 'structural_block',
+    });
   }
 
   if (structuralErrors.length > 0) {
-    blockAndExit(
-      sessionId,
-      stopHookActive,
-      buildStructuralBlockReason(structuralErrors),
-      maxBlocks,
-    );
+    blockAndExit(sessionId, buildStructuralBlockReason(structuralErrors), maxBlocks, {
+      ...telemetryBase,
+      event_type: 'structural_block',
+    });
   }
 
   // Trigger matches only.
-  blockAndExit(sessionId, stopHookActive, buildBlockReason(triggerMatches), maxBlocks);
+  blockAndExit(sessionId, buildBlockReason(triggerMatches, sentenceScoresForBlock), maxBlocks, {
+    ...telemetryBase,
+    event_type: 'block',
+  });
+}
+
+// =============================================================================
+// Observation template validation
+// =============================================================================
+
+/**
+ * Required fields for each observation template type.
+ * Values are the field label strings (without the trailing colon).
+ */
+const TEMPLATE_REQUIRED_FIELDS = {
+  'TOOL RUN': ['Command', 'Observed', 'Scope', 'Does not cover'],
+  'AGENT REPORT': ['Reported', 'Independently verified'],
+  COMMITTED: ['Changes', 'Validation'],
+};
+
+/**
+ * Detect observation template headers in raw response text and validate that
+ * all required fields are present with non-empty, non-placeholder values.
+ *
+ * Operates on raw (non-stripped) text so that templates in prose are found.
+ * Templates inside fenced code blocks are intentionally still detected — when
+ * a response contains a template header followed by the required fields, it
+ * signals an observation claim regardless of surrounding markdown.
+ *
+ * @param {string} text - Raw assistant response text.
+ * @returns {{ hasTemplate: false } |
+ *           { hasTemplate: true, valid: true } |
+ *           { hasTemplate: true, valid: false, errors: Array<{ template: string, missingField: string }> }}
+ */
+function validateTemplateBlocks(text) {
+  const PLACEHOLDER_RE = /^\s*\[.*\]\s*$/; // value is only a [...] placeholder
+
+  /**
+   * Extract the block of text starting at `headerLine` up to the next blank
+   * line or end of text.
+   *
+   * @param {string[]} lines - All lines of `text`.
+   * @param {number} headerIdx - Index of the header line.
+   * @returns {string[]} Lines from (and including) the header line to the end of the block.
+   */
+  function extractBlock(lines, headerIdx) {
+    const block = [lines[headerIdx]];
+    for (let i = headerIdx + 1; i < lines.length; i++) {
+      if (lines[i].trim() === '') break;
+      block.push(lines[i]);
+    }
+    return block;
+  }
+
+  /**
+   * Check whether a required field is satisfied within the block.
+   * A field is satisfied when a line starts with `<fieldLabel>:` and the
+   * value after the colon is non-empty and not a placeholder.
+   *
+   * @param {string[]} blockLines
+   * @param {string} fieldLabel
+   * @returns {boolean}
+   */
+  function fieldPresent(blockLines, fieldLabel) {
+    const prefix = `${fieldLabel}:`;
+    for (const line of blockLines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith(prefix)) {
+        const value = trimmed.slice(prefix.length);
+        if (!value.trim() || PLACEHOLDER_RE.test(value)) return false;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const lines = text.split('\n');
+  const errors = [];
+  let hasTemplate = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+
+    // Detect which template header this line matches (if any).
+    let templateName = null;
+    if (trimmed === 'TOOL RUN') {
+      templateName = 'TOOL RUN';
+    } else if (/^AGENT REPORT/.test(trimmed)) {
+      templateName = 'AGENT REPORT';
+    } else if (/^COMMITTED\s+\S/.test(trimmed) || trimmed === 'COMMITTED') {
+      templateName = 'COMMITTED';
+    }
+
+    if (!templateName) continue;
+
+    hasTemplate = true;
+    const requiredFields = TEMPLATE_REQUIRED_FIELDS[templateName];
+    const block = extractBlock(lines, i);
+
+    for (const field of requiredFields) {
+      if (!fieldPresent(block, field)) {
+        errors.push({ template: templateName, missingField: field });
+      }
+    }
+  }
+
+  if (!hasTemplate) return { hasTemplate: false };
+  if (errors.length === 0) return { hasTemplate: true, valid: true };
+  return { hasTemplate: true, valid: false, errors };
 }
 
 // Export internals for testing; run main() only when executed directly.
@@ -1268,6 +2261,8 @@ module.exports = {
   isMainChainEntry,
   hasEvidenceNearby,
   isIndexWithinQuestion,
+  getSentenceContaining,
+  hasSentenceCodeReference,
   isQualityScore,
   hasEnumerationNearby,
   isNegatedParticiple,
@@ -1281,6 +2276,7 @@ module.exports = {
   loadConfig,
   scoreText,
   DEFAULT_WEIGHTS,
+  DEFAULT_THRESHOLDS,
   // New introspection exports
   appendIntrospectionLog,
   hashText,
@@ -1290,4 +2286,22 @@ module.exports = {
   stripLabeledClaimLines,
   // Uncertainty enumeration suppression
   isWithinUncertaintyEnumeration,
+  // Compact agent exemption
+  isCompactAgentSession,
+  // Telemetry
+  writeTelemetry,
+  getLastAssistantMeta,
+  TELEMETRY_DB_PATH,
+  // Shadow mode
+  writeShadowLog,
+  SHADOW_LOG_PATH,
+  // Observation template validation
+  validateTemplateBlocks,
+  // Internal contradiction detection exports
+  detectInternalContradictions,
+  extractSignificantTerms,
+  stripNegationMarkers,
+  stemWord,
+  NEGATION_POLARITY_RE,
+  INTERNAL_CONTRADICTION_STOP_WORDS,
 };
