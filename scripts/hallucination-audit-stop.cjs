@@ -581,6 +581,12 @@ const LIST_ITEM_RE = /^\s*(?:\d+[.)]\s|\*\s|-\s)/gm;
 const ABSENCE_CLAIM_RE =
   /\b(?:there\s+is\s+no|there\s+are\s+no|no\s+such|doesn't\s+exist|does\s+not\s+exist|cannot\s+be\s+found|couldn't\s+find|can't\s+find|is\s+missing|absence\s+of|no\s+config|no\s+file|no\s+function|no\s+method)\b/gi;
 
+// Matches bare behavioral outcome assertions: "it works", "is working", "verified", "confirmed",
+// "fixed", "resolved", "done" — without supporting tool output or evidence nearby.
+// Used by block 8 (ungrounded_behavioral_assertion). The `g` flag is required for matchAll().
+const BEHAVIORAL_ASSERTION_RE =
+  /\b(?:it\s+works?|is\s+working|verified|confirmed|fixed|resolved|done)\b/gi;
+
 // Uncertainty markers — phrases that signal the assistant is explicitly disclosing
 // what it does NOT know. When a speculation phrase appears near these markers,
 // the speculation serves a disclosure function, not a speculative-assertion function.
@@ -1001,7 +1007,7 @@ function hasToolUseInRecentEntries(entries, recentTurns = 2) {
  *   - `config.categories.<name>.replacePatterns` — when `true`, customPatterns replaces built-ins.
  *   - `config.allowlist` — array of strings/RegExps; any match whose evidence satisfies an entry is dropped.
  *   - `config.maxTriggersPerResponse` — upper bound on the number of returned matches.
- * @returns {Array<{kind: string, evidence: string}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, `evaluative_design_claim`, `internal_contradiction`, or `unsupported_absence`, and `evidence` is the matched snippet from the text.
+ * @returns {Array<{kind: string, evidence: string}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, `evaluative_design_claim`, `internal_contradiction`, `unsupported_absence`, or `ungrounded_behavioral_assertion`, and `evidence` is the matched snippet from the text.
  */
 function findTriggerMatches(text, config = {}) {
   const rawMatches = [];
@@ -1525,6 +1531,49 @@ function findTriggerMatches(text, config = {}) {
     runCustomPatterns('unsupported_absence');
   }
 
+  // 8) Ungrounded behavioral assertions: bare claims that something works/is fixed/is done
+  // without tool-output or evidence backing. Suppressed when a valid observation template
+  // is present (structured response already enforces evidence).
+  if (isCategoryEnabled('ungrounded_behavioral_assertion')) {
+    if (config._hasValidTemplate !== true) {
+      if (useBuiltIn('ungrounded_behavioral_assertion')) {
+        BEHAVIORAL_ASSERTION_RE.lastIndex = 0;
+        for (const m of haystack.matchAll(BEHAVIORAL_ASSERTION_RE)) {
+          const idx = m.index;
+          if (isIndexWithinQuestion(haystack, idx)) continue;
+          if (hasEvidenceNearby(haystack, idx, rawText)) continue;
+          // Skip structured claim label markers: [VERIFIED], [CONFIRMED], etc.
+          if (idx > 0 && haystack[idx - 1] === '[') continue;
+          // Skip claim-system error descriptions: "VERIFIED claims require Evidence:..."
+          if (/^\s+claims?\b/.test(haystack.slice(idx + m[0].length, idx + m[0].length + 15)))
+            continue;
+          // Skip standalone section header lines (e.g., "VERIFIED" on its own line in
+          // the structured claim format template). A bare section title is not an assertion.
+          {
+            const lineStart = idx > 0 ? haystack.lastIndexOf('\n', idx - 1) + 1 : 0;
+            const lineEnd = haystack.indexOf('\n', idx + m[0].length);
+            const lineContent = (
+              lineEnd === -1 ? haystack.slice(lineStart) : haystack.slice(lineStart, lineEnd)
+            ).trim();
+            if (lineContent === m[0].trim()) continue;
+          }
+          // Skip angle-bracket template placeholders: <claim IDs from VERIFIED and CAUSAL only>
+          {
+            const lookback = haystack.slice(Math.max(0, idx - 60), idx);
+            const lastOpen = lookback.lastIndexOf('<');
+            const lastClose = lookback.lastIndexOf('>');
+            if (lastOpen !== -1 && (lastClose === -1 || lastOpen > lastClose)) {
+              const closingBracket = haystack.indexOf('>', idx);
+              if (closingBracket !== -1 && closingBracket - idx < 60) continue;
+            }
+          }
+          matches.push({ kind: 'ungrounded_behavioral_assertion', evidence: m[0].trim() });
+        }
+      }
+      runCustomPatterns('ungrounded_behavioral_assertion');
+    }
+  }
+
   // Apply allowlist filter and maxTriggersPerResponse limit.
   const allowlist = Array.isArray(config.allowlist) ? config.allowlist : [];
   const maxTriggers =
@@ -2023,10 +2072,11 @@ function main() {
   // once fail-open fires, we skip all validation to avoid infinite loops.
   const templateResult = validateTemplateBlocks(lastAssistantText);
 
-  // hasValidTemplate is declared for Phase 3c (ungrounded_behavioral_assertion suppression).
-  // Currently not acted upon — trigger scan runs regardless of template presence.
+  // hasValidTemplate suppresses the ungrounded_behavioral_assertion block (block 8) when
+  // the response already contains a valid structured observation template — responses that
+  // follow the evidence-signaling structure should not be penalised for bare outcome words.
   const hasValidTemplate = templateResult.hasTemplate === true && templateResult.valid === true;
-  void hasValidTemplate; // Phase 3c will use this
+  const augmentedConfig = { ...config, _hasValidTemplate: hasValidTemplate };
 
   const { data: loopStateData } = loadLoopState(sessionId);
   const currentBlockCount = Number(loopStateData.blocks || 0);
@@ -2065,16 +2115,16 @@ function main() {
       // Structural errors present — also run trigger detection on the raw text
       // (labels are invalid, so don't strip them — the whole response is suspect).
       structuralErrors = structureResult.errors;
-      triggerMatches = findTriggerMatches(lastAssistantText, config);
+      triggerMatches = findTriggerMatches(lastAssistantText, augmentedConfig);
     } else {
       // Structured + valid: run trigger audit on text with labeled claim lines
       // stripped so acknowledged typed claims don't re-fire speculation/causality detectors.
       const strippedText = stripLabeledClaimLines(lastAssistantText);
-      triggerMatches = findTriggerMatches(strippedText, config);
+      triggerMatches = findTriggerMatches(strippedText, augmentedConfig);
     }
   } else {
     // Unstructured response: run trigger audit on full text.
-    triggerMatches = findTriggerMatches(lastAssistantText, config);
+    triggerMatches = findTriggerMatches(lastAssistantText, augmentedConfig);
   }
 
   // Post-filter: unsupported_absence is only problematic without recent tool use.
@@ -2357,4 +2407,6 @@ module.exports = {
   // Absence claim detection exports
   hasToolUseInRecentEntries,
   ABSENCE_CLAIM_RE,
+  // Behavioral assertion detection exports
+  BEHAVIORAL_ASSERTION_RE,
 };
