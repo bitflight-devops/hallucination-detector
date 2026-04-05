@@ -1,3 +1,9 @@
+## [1.16.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.16.0...v1.16.1) (2026-04-05)
+
+### Bug Fixes
+
+- **detection:** suppress unsupported_absence false positives in prescriptive and verified contexts ([efd2fc4](https://github.com/bitflight-devops/hallucination-detector/commit/efd2fc44106de629ece0b12d5717893ebba5ba6a))
+
 ## [1.16.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.15.4...v1.16.0) (2026-04-05)
 
 ### Features
