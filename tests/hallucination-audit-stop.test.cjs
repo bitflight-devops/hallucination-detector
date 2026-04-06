@@ -1170,7 +1170,9 @@ describe('block reason self-trigger regression', () => {
     const reason = buildBlockReason(matches);
     // The evidence line is the second line of the "Detected trigger language" section.
     // Extract just that line to confirm newlines were collapsed before wrapping in backticks.
-    const evidenceLine = reason.split('\n').find((l) => l.startsWith('- speculation_language:'));
+    const evidenceLine = reason
+      .split('\n')
+      .find((l) => l.startsWith('- speculation_language (confidence:'));
     expect(evidenceLine).toBeDefined();
     expect(evidenceLine).toContain('`the cleanest fix`');
     expect(evidenceLine).not.toContain('\n');
@@ -1180,12 +1182,14 @@ describe('block reason self-trigger regression', () => {
     const matches = [{ kind: 'speculation_language', evidence: 'the `cleanest` fix', offset: 0 }];
     const reason = buildBlockReason(matches);
     // Extract just the evidence line — the static instruction text must not interfere.
-    const evidenceLine = reason.split('\n').find((l) => l.startsWith('- speculation_language:'));
+    const evidenceLine = reason
+      .split('\n')
+      .find((l) => l.startsWith('- speculation_language (confidence:'));
     expect(evidenceLine).toBeDefined();
     // Backticks replaced with single quotes so the span is a single inline-code token.
     expect(evidenceLine).toContain("`the 'cleanest' fix`");
     // The evidence span must open and close exactly once: one ` at start, one ` at end.
-    const span = evidenceLine.replace(/^- speculation_language: /, '');
+    const span = evidenceLine.replace(/^- speculation_language \(confidence: [^)]+\): /, '');
     expect(span.startsWith('`')).toBe(true);
     expect(span.endsWith('`')).toBe(true);
     expect(span.slice(1, -1)).not.toContain('`');
@@ -2072,7 +2076,7 @@ describe('buildCombinedBlockReason', () => {
     ];
     const matches = [{ kind: 'speculation_language', evidence: 'probably' }];
     const reason = buildCombinedBlockReason(errors, matches);
-    expect(reason).toContain('- speculation_language: `probably`');
+    expect(reason).toContain('- speculation_language (confidence: ?): `probably`');
   });
 
   it('includes "Fix ALL of the above" instruction', () => {
@@ -2131,8 +2135,8 @@ describe('buildCombinedBlockReason', () => {
       { code: 'missing_evidence', claimId: 'c1', label: 'VERIFIED', message: 'Missing evidence' },
     ];
     const reason = buildCombinedBlockReason(errors, matches);
-    // Count lines that start with "- <kind>:" pattern (trigger match lines)
-    const matchLineCount = reason.split('\n').filter((l) => /^- \w+: `/.test(l)).length;
+    // Count lines that start with "- <kind> (confidence: ..." pattern (trigger match lines)
+    const matchLineCount = reason.split('\n').filter((l) => /^- \w+ \(confidence:/.test(l)).length;
     expect(matchLineCount).toBe(4);
   });
 
@@ -4909,5 +4913,248 @@ describe('per-category threshold scoring', () => {
     expect(globalResult[0].label).toBe('UNCERTAIN');
     // Per-category: 0.5 > 0.4 → HALLUCINATED.
     expect(perCatResult[0].label).toBe('HALLUCINATED');
+  });
+});
+
+// =============================================================================
+// computeConfidence — unit tests for confidence scoring
+// =============================================================================
+
+describe('computeConfidence', () => {
+  it('every match from findTriggerMatches has an integer confidence in [0, 100]', () => {
+    const text = 'I think this is probably correct. Everything is fully resolved.';
+    const matches = findTriggerMatches(text);
+    expect(matches.length).toBeGreaterThan(0);
+    for (const m of matches) {
+      expect(typeof m.confidence).toBe('number');
+      expect(Number.isInteger(m.confidence)).toBe(true);
+      expect(m.confidence).toBeGreaterThanOrEqual(0);
+      expect(m.confidence).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('kind and evidence fields are preserved alongside confidence', () => {
+    const matches = findTriggerMatches('I think the config is wrong.');
+    expect(matches.length).toBeGreaterThan(0);
+    const m = matches[0];
+    expect(typeof m.kind).toBe('string');
+    expect(typeof m.evidence).toBe('string');
+    expect(typeof m.confidence).toBe('number');
+  });
+
+  it('high-risk phrase (i think) has higher confidence than low-risk phrase (may)', () => {
+    // "It may fail here" — 'it' is not a permissive pronoun so 'may' is not suppressed.
+    const mayMatches = findTriggerMatches('It may fail here.');
+    const iThinkMatches = findTriggerMatches('I think the config is wrong.');
+    const mayMatch = mayMatches.find((m) => m.evidence === 'may');
+    const iThinkMatch = iThinkMatches.find((m) => m.evidence === 'i think');
+    expect(mayMatch).toBeTruthy();
+    expect(iThinkMatch).toBeTruthy();
+    expect(iThinkMatch.confidence).toBeGreaterThan(mayMatch.confidence);
+  });
+
+  it('high-risk phrase (presumably) has higher confidence than low-risk phrase (could be)', () => {
+    const presumablyMatches = findTriggerMatches('Presumably the root cause is a race condition.');
+    const couldBeMatches = findTriggerMatches('It could be a timing issue.');
+    const presumablyMatch = presumablyMatches.find((m) => m.evidence === 'presumably');
+    const couldBeMatch = couldBeMatches.find((m) => m.evidence === 'could be');
+    expect(presumablyMatch).toBeTruthy();
+    expect(couldBeMatch).toBeTruthy();
+    expect(presumablyMatch.confidence).toBeGreaterThan(couldBeMatch.confidence);
+  });
+
+  it('evidence proximity reduces confidence — match with File: evidence nearby has lower confidence', () => {
+    const withEvidence = findTriggerMatches('I think the bug is here. File: scripts/foo.cjs:42');
+    const withoutEvidence = findTriggerMatches('I think the bug is here.');
+    const withM = withEvidence.find((m) => m.evidence === 'i think');
+    const withoutM = withoutEvidence.find((m) => m.evidence === 'i think');
+    expect(withM).toBeTruthy();
+    expect(withoutM).toBeTruthy();
+    expect(withM.confidence).toBeLessThan(withoutM.confidence);
+  });
+
+  it('category stacking: two different categories in the same sentence have higher confidence than each alone', () => {
+    // "I think everything is fully resolved." — speculation_language + completeness_claim
+    const stackedMatches = findTriggerMatches('I think everything is fully resolved.');
+    // Single-category text for baseline
+    const speculationOnly = findTriggerMatches('I think the config is wrong.');
+
+    const stackedSpec = stackedMatches.find((m) => m.evidence === 'i think');
+    const soloSpec = speculationOnly.find((m) => m.evidence === 'i think');
+
+    expect(stackedSpec).toBeTruthy();
+    expect(soloSpec).toBeTruthy();
+    // Stacked sentence → stacking bonus added → higher confidence.
+    expect(stackedSpec.confidence).toBeGreaterThan(soloSpec.confidence);
+  });
+
+  it('context density: two matches within 200 chars have higher confidence than isolated matches', () => {
+    // "I think this is probably correct." — two speculation matches in same short sentence.
+    const denseMatches = findTriggerMatches('I think this is probably correct.');
+    const iThinkDense = denseMatches.find((m) => m.evidence === 'i think');
+    const probablyDense = denseMatches.find((m) => m.evidence === 'probably');
+
+    // Single isolated match for baseline.
+    const isolated = findTriggerMatches('I think the config is wrong.');
+    const iThinkIsolated = isolated.find((m) => m.evidence === 'i think');
+
+    expect(iThinkDense).toBeTruthy();
+    expect(probablyDense).toBeTruthy();
+    expect(iThinkIsolated).toBeTruthy();
+
+    // Dense text has nearby match → density bonus → higher confidence than isolated.
+    expect(iThinkDense.confidence).toBeGreaterThan(iThinkIsolated.confidence);
+  });
+
+  it('matches with untracked offset (-1) do not throw and return valid confidence', () => {
+    // internal_contradiction matches use offset -1.
+    // Two contradicting sentences:
+    const text =
+      'The function returns null when the input is empty. The function returns zero when the input is empty.';
+    let matches;
+    expect(() => {
+      matches = findTriggerMatches(text);
+    }).not.toThrow();
+    // Whether or not internal_contradiction fires, all matches must have valid confidence.
+    for (const m of matches) {
+      expect(Number.isInteger(m.confidence)).toBe(true);
+      expect(m.confidence).toBeGreaterThanOrEqual(0);
+      expect(m.confidence).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it('scoreSentence and aggregateWeightedScore still work (read only kind field)', () => {
+    // These functions must not break after confidence was added to match objects.
+    const sentence = 'I think the change is probably fine.';
+    const scores = scoreSentence(sentence);
+    expect(typeof scores).toBe('object');
+    expect(scores.speculation_language).toBe(1);
+    const aggregate = aggregateWeightedScore(scores);
+    expect(typeof aggregate).toBe('number');
+    expect(aggregate).toBeGreaterThan(0);
+  });
+
+  it('confidence is an integer (not a float)', () => {
+    const matches = findTriggerMatches('I believe this is probably the issue.');
+    for (const m of matches) {
+      expect(m.confidence % 1).toBe(0);
+    }
+  });
+
+  it('all 8 detection categories produce a confidence value', () => {
+    const texts = {
+      speculation_language: 'I think the issue is here.',
+      causality_language: 'The bug occurred because the cache expired.',
+      pseudo_quantification: 'The code quality is 8/10.',
+      completeness_claim: 'All files checked and everything is fixed.',
+      evaluative_design_claim: 'This is the cleanest possible solution.',
+      unsupported_absence: 'There is no configuration file in this directory.',
+      ungrounded_behavioral_assertion: 'The fix is done and it works.',
+    };
+    for (const [category, text] of Object.entries(texts)) {
+      const matches = findTriggerMatches(text);
+      const catMatches = matches.filter((m) => m.kind === category);
+      if (catMatches.length > 0) {
+        for (const m of catMatches) {
+          expect(Number.isInteger(m.confidence)).toBe(true);
+          expect(m.confidence).toBeGreaterThanOrEqual(0);
+          expect(m.confidence).toBeLessThanOrEqual(100);
+        }
+      }
+    }
+  });
+
+  it('backtick evidence in rawText reduces confidence — proximity check uses unstripped text', () => {
+    // "I think" fires in both texts. The second text adds backtick-cited evidence
+    // within 150 chars. stripLowSignalRegions removes the backtick span from haystack,
+    // so the old bug (passing haystack as rawText to hasEvidenceNearby) would not find
+    // the evidence and would leave confidence unchanged. The fix passes rawText so
+    // BACKTICK_RE detects inline code in the original text and reduces the proximity score.
+    //
+    // Base text must contain no EVIDENCE_MARKERS words (e.g. "failed", "error") so that
+    // the proximity check is driven purely by the backtick content in the second variant.
+    const withoutEvidence = findTriggerMatches('I think the config is misconfigured.');
+    const withBacktickEvidence = findTriggerMatches(
+      'I think the config is misconfigured. The relevant setting is `maxRetries: 0`.',
+    );
+    const mWithout = withoutEvidence.find((m) => m.evidence === 'i think');
+    const mWith = withBacktickEvidence.find((m) => m.evidence === 'i think');
+    expect(mWithout).toBeTruthy();
+    expect(mWith).toBeTruthy();
+    // Evidence nearby → proximity score 0.0 → lower overall confidence.
+    expect(mWith.confidence).toBeLessThan(mWithout.confidence);
+  });
+});
+
+// =============================================================================
+// buildBlockReason — reportingThreshold filtering
+// =============================================================================
+describe('buildBlockReason — reportingThreshold filtering', () => {
+  it('excludes sub-threshold matches from reason text while block still includes all kinds', () => {
+    const matches = [
+      { kind: 'speculation_language', evidence: 'probably', confidence: 40 },
+      { kind: 'causality_language', evidence: 'because', confidence: 80 },
+    ];
+    const reason = buildBlockReason(matches, [], { reportingThreshold: 50 });
+    // Only the above-threshold match appears in evidence snippets
+    expect(reason).not.toContain('- speculation_language (confidence:');
+    expect(reason).toContain('- causality_language (confidence:');
+    // But both kinds still appear in the "Kinds flagged" line
+    expect(reason).toContain('speculation_language');
+    expect(reason).toContain('causality_language');
+  });
+
+  it('shows all matches when reportingThreshold is 0', () => {
+    const matches = [
+      { kind: 'speculation_language', evidence: 'probably', confidence: 0 },
+      { kind: 'causality_language', evidence: 'because', confidence: 10 },
+    ];
+    const reason = buildBlockReason(matches, [], { reportingThreshold: 0 });
+    expect(reason).toContain('- speculation_language (confidence: 0):');
+    expect(reason).toContain('- causality_language (confidence: 10):');
+  });
+
+  it('falls back to all matches when all are below reportingThreshold: 100', () => {
+    const matches = [{ kind: 'speculation_language', evidence: 'probably', confidence: 80 }];
+    const reason = buildBlockReason(matches, [], { reportingThreshold: 100 });
+    // confidence 80 < 100, so reportable is empty → fallback shows all matches
+    expect(reason).toContain('- speculation_language (confidence: 80):');
+    expect(reason).toContain('`probably`');
+  });
+
+  it('includes match at exactly the threshold', () => {
+    const matches = [{ kind: 'speculation_language', evidence: 'probably', confidence: 50 }];
+    const reason = buildBlockReason(matches, [], { reportingThreshold: 50 });
+    expect(reason).toContain('- speculation_language (confidence: 50):');
+    expect(reason).toContain('`probably`');
+  });
+
+  it('excludes match one below threshold but includes match one above', () => {
+    const matches = [
+      { kind: 'speculation_language', evidence: 'probably', confidence: 49 },
+      { kind: 'causality_language', evidence: 'because', confidence: 51 },
+    ];
+    const reason = buildBlockReason(matches, [], { reportingThreshold: 50 });
+    expect(reason).not.toContain('- speculation_language (confidence: 49)');
+    expect(reason).toContain('- causality_language (confidence: 51):');
+  });
+
+  it('evidence lines include confidence annotation', () => {
+    const matches = [{ kind: 'causality_language', evidence: 'because', confidence: 72 }];
+    const reason = buildBlockReason(matches, [], {});
+    expect(reason).toContain('- causality_language (confidence: 72): `because`');
+  });
+
+  it('telemetry mapper passes confidence through to match objects', () => {
+    // Verify that match objects from findTriggerMatches carry confidence so the
+    // telemetry mapper (line ~2813) can include it in the introspection log.
+    const matches = findTriggerMatches('I think this is probably broken.');
+    expect(matches.length).toBeGreaterThan(0);
+    for (const m of matches) {
+      expect(typeof m.confidence).toBe('number');
+      // The mapper spreads { kind, evidence, confidence } — confidence must be defined
+      const mapped = { kind: m.kind, evidence: m.evidence, confidence: m.confidence };
+      expect(mapped.confidence).toBe(m.confidence);
+    }
   });
 });

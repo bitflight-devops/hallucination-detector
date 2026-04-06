@@ -11,6 +11,7 @@ const {
   isValidCategoryThreshold,
   DEFAULT_WEIGHTS,
   DEFAULT_THRESHOLDS,
+  DEFAULT_CONFIDENCE_WEIGHTS,
   DEFAULT_CONFIG,
   getProjectConfigPath,
 } = require('../scripts/hallucination-config.cjs');
@@ -1350,5 +1351,288 @@ describe('per-category thresholds', () => {
       expect(merged.categories.speculation_language.uncertain).toBe(0.3);
       expect(merged.categories.causality_language.uncertain).toBe(0.4);
     });
+  });
+});
+
+// =============================================================================
+// DEFAULT_CONFIDENCE_WEIGHTS
+// =============================================================================
+describe('DEFAULT_CONFIDENCE_WEIGHTS', () => {
+  it('has exactly 4 keys', () => {
+    expect(Object.keys(DEFAULT_CONFIDENCE_WEIGHTS).length).toBe(4);
+  });
+
+  it('has patternStrength: 0.4', () => {
+    expect(DEFAULT_CONFIDENCE_WEIGHTS.patternStrength).toBe(0.4);
+  });
+
+  it('has evidenceProximity: 0.25', () => {
+    expect(DEFAULT_CONFIDENCE_WEIGHTS.evidenceProximity).toBe(0.25);
+  });
+
+  it('has categoryStacking: 0.2', () => {
+    expect(DEFAULT_CONFIDENCE_WEIGHTS.categoryStacking).toBe(0.2);
+  });
+
+  it('has contextDensity: 0.15', () => {
+    expect(DEFAULT_CONFIDENCE_WEIGHTS.contextDensity).toBe(0.15);
+  });
+
+  it('values sum to 1.0', () => {
+    const sum = Object.values(DEFAULT_CONFIDENCE_WEIGHTS).reduce((a, b) => a + b, 0);
+    expect(Math.abs(sum - 1.0)).toBeLessThan(1e-9);
+  });
+});
+
+// =============================================================================
+// DEFAULT_CONFIG — confidence scoring fields
+// =============================================================================
+describe('DEFAULT_CONFIG confidence scoring fields', () => {
+  it('has confidenceWeights equal to DEFAULT_CONFIDENCE_WEIGHTS', () => {
+    expect(DEFAULT_CONFIG.confidenceWeights).toEqual(DEFAULT_CONFIDENCE_WEIGHTS);
+  });
+
+  it('has reportingThreshold: 50', () => {
+    expect(DEFAULT_CONFIG.reportingThreshold).toBe(50);
+  });
+});
+
+// =============================================================================
+// validateConfig — reportingThreshold
+// =============================================================================
+describe('validateConfig reportingThreshold', () => {
+  let tmpDir;
+  let originalCwd;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-rt-test-${Date.now()}-`));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('accepts reportingThreshold: 0', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { reportingThreshold: 0 } }),
+    );
+    const config = loadConfig();
+    expect(config.reportingThreshold).toBe(0);
+  });
+
+  it('accepts reportingThreshold: 50', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { reportingThreshold: 50 } }),
+    );
+    const config = loadConfig();
+    expect(config.reportingThreshold).toBe(50);
+  });
+
+  it('accepts reportingThreshold: 100', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { reportingThreshold: 100 } }),
+    );
+    const config = loadConfig();
+    expect(config.reportingThreshold).toBe(100);
+  });
+
+  it('rejects reportingThreshold: -5 and falls back to 50', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { reportingThreshold: -5 } }),
+    );
+    const config = loadConfig();
+    expect(config.reportingThreshold).toBe(50);
+  });
+
+  it('rejects reportingThreshold: 101 and falls back to 50', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { reportingThreshold: 101 } }),
+    );
+    const config = loadConfig();
+    expect(config.reportingThreshold).toBe(50);
+  });
+
+  it('rejects reportingThreshold: "high" and falls back to 50', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { reportingThreshold: 'high' } }),
+    );
+    const config = loadConfig();
+    expect(config.reportingThreshold).toBe(50);
+  });
+
+  it('rejects reportingThreshold: Infinity and falls back to 50', () => {
+    // JSON cannot encode Infinity — use rc file for this case
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { reportingThreshold: Infinity };',
+    );
+    const config = loadConfig();
+    expect(config.reportingThreshold).toBe(50);
+  });
+
+  it('rejects reportingThreshold: NaN and falls back to 50', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { reportingThreshold: NaN };',
+    );
+    const config = loadConfig();
+    expect(config.reportingThreshold).toBe(50);
+  });
+});
+
+// =============================================================================
+// validateConfig — confidenceWeights
+// =============================================================================
+describe('validateConfig confidenceWeights', () => {
+  let tmpDir;
+  let originalCwd;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-cw-test-${Date.now()}-`));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('accepts a valid confidenceWeights object', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({
+        'hallucination-detector': {
+          confidenceWeights: {
+            patternStrength: 0.5,
+            evidenceProximity: 0.2,
+            categoryStacking: 0.2,
+            contextDensity: 0.1,
+          },
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.confidenceWeights.patternStrength).toBe(0.5);
+    expect(config.confidenceWeights.evidenceProximity).toBe(0.2);
+    expect(config.confidenceWeights.categoryStacking).toBe(0.2);
+    expect(config.confidenceWeights.contextDensity).toBe(0.1);
+  });
+
+  it('rejects non-object confidenceWeights and falls back to defaults', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { confidenceWeights: 'strong' } }),
+    );
+    const config = loadConfig();
+    expect(config.confidenceWeights).toEqual(DEFAULT_CONFIDENCE_WEIGHTS);
+  });
+
+  it('rejects array confidenceWeights and falls back to defaults', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { confidenceWeights: [0.4, 0.25, 0.2, 0.15] } }),
+    );
+    const config = loadConfig();
+    expect(config.confidenceWeights).toEqual(DEFAULT_CONFIDENCE_WEIGHTS);
+  });
+
+  it('rejects individual key outside [0,1] and falls back that key to default', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({
+        'hallucination-detector': {
+          confidenceWeights: { patternStrength: 1.5 },
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.confidenceWeights.patternStrength).toBe(
+      DEFAULT_CONFIDENCE_WEIGHTS.patternStrength,
+    );
+  });
+
+  it('rejects negative key value and falls back that key to default', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({
+        'hallucination-detector': {
+          confidenceWeights: { evidenceProximity: -0.1 },
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.confidenceWeights.evidenceProximity).toBe(
+      DEFAULT_CONFIDENCE_WEIGHTS.evidenceProximity,
+    );
+  });
+
+  it('preserves unknown keys in confidenceWeights', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.hallucination-detectorrc.cjs'),
+      'module.exports = { confidenceWeights: { patternStrength: 0.3, futureKey: 0.5 } };',
+    );
+    const config = loadConfig();
+    expect(config.confidenceWeights.patternStrength).toBe(0.3);
+    expect(config.confidenceWeights.futureKey).toBe(0.5);
+  });
+
+  it('partial override fills missing keys from defaults', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({
+        'hallucination-detector': {
+          confidenceWeights: { patternStrength: 0.6 },
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.confidenceWeights.patternStrength).toBe(0.6);
+    expect(config.confidenceWeights.evidenceProximity).toBe(
+      DEFAULT_CONFIDENCE_WEIGHTS.evidenceProximity,
+    );
+    expect(config.confidenceWeights.categoryStacking).toBe(
+      DEFAULT_CONFIDENCE_WEIGHTS.categoryStacking,
+    );
+    expect(config.confidenceWeights.contextDensity).toBe(DEFAULT_CONFIDENCE_WEIGHTS.contextDensity);
+  });
+});
+
+// =============================================================================
+// loadConfig — confidenceWeights merge behaviour
+// =============================================================================
+describe('loadConfig confidenceWeights merge', () => {
+  let tmpDir;
+  let originalCwd;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `hd-cwm-test-${Date.now()}-`));
+    originalCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(tmpDir, { recursive: true });
+  });
+
+  it('returns all 4 default keys when no user config provided', () => {
+    const config = loadConfig();
+    expect(Object.keys(config.confidenceWeights).length).toBeGreaterThanOrEqual(4);
+    expect(config.confidenceWeights).toMatchObject(DEFAULT_CONFIDENCE_WEIGHTS);
+  });
+
+  it('confidenceWeights is frozen', () => {
+    const config = loadConfig();
+    expect(Object.isFrozen(config.confidenceWeights)).toBe(true);
   });
 });

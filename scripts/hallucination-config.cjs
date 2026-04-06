@@ -50,6 +50,23 @@ const DEFAULT_THRESHOLDS = {
 };
 
 /**
+ * Default weights for the four confidence-score components.
+ * These control how much each factor contributes to the per-match
+ * confidence integer in [0, 100].
+ *
+ * - patternStrength:    contribution of the pattern's inherent severity
+ * - evidenceProximity: contribution of evidence markers near the match
+ * - categoryStacking:  bonus when multiple categories fire in the same sentence
+ * - contextDensity:    bonus when multiple matches cluster within 200 chars
+ */
+const DEFAULT_CONFIDENCE_WEIGHTS = {
+  patternStrength: 0.4,
+  evidenceProximity: 0.25,
+  categoryStacking: 0.2,
+  contextDensity: 0.15,
+};
+
+/**
  * Default full configuration object.
  */
 const DEFAULT_CONFIG = {
@@ -81,6 +98,9 @@ const DEFAULT_CONFIG = {
   ignoreCategories: [], // category names skipped entirely (still written to telemetry with was_ignored=1)
   blockSubagents: false, // block when hook_event_name is SubagentStop
   blockUserSessions: true, // block when hook_event_name is Stop (user-facing session)
+  // Confidence scoring
+  confidenceWeights: DEFAULT_CONFIDENCE_WEIGHTS,
+  reportingThreshold: 50, // minimum confidence [0,100] for a match to appear in block reason text
 };
 
 // ============================================================================
@@ -411,6 +431,53 @@ function validateConfig(obj, source) {
       delete obj.thresholds;
     }
   }
+  // reportingThreshold: finite number in [0, 100]
+  if ('reportingThreshold' in obj) {
+    if (
+      !Number.isFinite(obj.reportingThreshold) ||
+      obj.reportingThreshold < 0 ||
+      obj.reportingThreshold > 100
+    ) {
+      warn('reportingThreshold', obj.reportingThreshold, 50);
+      delete obj.reportingThreshold;
+    }
+  }
+  // confidenceWeights: plain object; each of 4 recognized keys must be finite number in [0,1];
+  // unknown keys are preserved with a warning.
+  if ('confidenceWeights' in obj) {
+    if (
+      typeof obj.confidenceWeights !== 'object' ||
+      obj.confidenceWeights === null ||
+      Array.isArray(obj.confidenceWeights)
+    ) {
+      process.stderr.write(
+        `[hallucination-detector] Invalid confidenceWeights value from ${src}; must be a plain object. Using default\n`,
+      );
+      delete obj.confidenceWeights;
+    } else {
+      const KNOWN_CONFIDENCE_KEYS = new Set([
+        'patternStrength',
+        'evidenceProximity',
+        'categoryStacking',
+        'contextDensity',
+      ]);
+      for (const key of Object.keys(obj.confidenceWeights)) {
+        if (!KNOWN_CONFIDENCE_KEYS.has(key)) {
+          process.stderr.write(
+            `[hallucination-detector] Unknown confidenceWeights key "${key}" from ${src}; preserved for future use\n`,
+          );
+          continue;
+        }
+        const val = obj.confidenceWeights[key];
+        if (!Number.isFinite(val) || val < 0 || val > 1) {
+          process.stderr.write(
+            `[hallucination-detector] Invalid confidenceWeights.${key} "${val}" from ${src}; using default ${DEFAULT_CONFIDENCE_WEIGHTS[key]}\n`,
+          );
+          delete obj.confidenceWeights[key];
+        }
+      }
+    }
+  }
   // categories: per-category overrides — validate threshold pairs when present.
   // Unknown category names are preserved with a warning (they may be user-defined
   // or from a future version). Invalid threshold fields are deleted so they fall
@@ -734,6 +801,7 @@ function loadConfig(_opts) {
     ...DEFAULT_CONFIG,
     weights: { ...DEFAULT_WEIGHTS },
     thresholds: { ...DEFAULT_THRESHOLDS },
+    confidenceWeights: { ...DEFAULT_CONFIDENCE_WEIGHTS },
     categories: {},
     ignorePatterns: [],
     ignoreBlocks: [],
@@ -763,6 +831,26 @@ function loadConfig(_opts) {
     ? { uncertain: config.thresholds.uncertain, hallucinated: config.thresholds.hallucinated }
     : { ...DEFAULT_THRESHOLDS };
 
+  // Validate and normalise confidenceWeights after all merges.
+  // Preserve all keys from the merged object (unknown keys included), then
+  // reset any recognized key that has an out-of-range value back to its default.
+  if (
+    config.confidenceWeights &&
+    typeof config.confidenceWeights === 'object' &&
+    !Array.isArray(config.confidenceWeights)
+  ) {
+    const confidenceWeights = { ...DEFAULT_CONFIDENCE_WEIGHTS, ...config.confidenceWeights };
+    for (const key of Object.keys(DEFAULT_CONFIDENCE_WEIGHTS)) {
+      const val = confidenceWeights[key];
+      if (!Number.isFinite(val) || val < 0 || val > 1) {
+        confidenceWeights[key] = DEFAULT_CONFIDENCE_WEIGHTS[key];
+      }
+    }
+    config.confidenceWeights = confidenceWeights;
+  } else {
+    config.confidenceWeights = { ...DEFAULT_CONFIDENCE_WEIGHTS };
+  }
+
   return deepFreeze(config);
 }
 
@@ -784,5 +872,6 @@ module.exports = {
   getProjectConfigPath,
   DEFAULT_WEIGHTS,
   DEFAULT_THRESHOLDS,
+  DEFAULT_CONFIDENCE_WEIGHTS,
   DEFAULT_CONFIG,
 };

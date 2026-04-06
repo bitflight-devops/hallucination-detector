@@ -45,6 +45,7 @@ const {
   loadWeights,
   DEFAULT_WEIGHTS,
   DEFAULT_THRESHOLDS,
+  DEFAULT_CONFIDENCE_WEIGHTS,
   isValidCategoryThreshold,
 } = require('./hallucination-config.cjs');
 const {
@@ -264,10 +265,16 @@ function writeStopHookLog(opts) {
 
       if (Array.isArray(opts.matches) && opts.matches.length > 0) {
         const insertMatch = db.prepare(
-          'INSERT INTO block_matches (log_id, category, evidence, was_ignored) VALUES (?, ?, ?, ?)',
+          'INSERT INTO block_matches (log_id, category, evidence, confidence, was_ignored) VALUES (?, ?, ?, ?, ?)',
         );
         for (const m of opts.matches) {
-          insertMatch.run(logId, m.kind || '', m.evidence ?? null, m.wasIgnored ? 1 : 0);
+          insertMatch.run(
+            logId,
+            m.kind || '',
+            m.evidence ?? null,
+            m.confidence ?? null,
+            m.wasIgnored ? 1 : 0,
+          );
         }
       }
       db.exec('COMMIT');
@@ -1150,6 +1157,268 @@ function hasToolUseInRecentEntries(entries, recentTurns = 2) {
   return false;
 }
 
+// =============================================================================
+// Confidence scoring — static lookup tables and computation
+// =============================================================================
+
+/**
+ * Per-phrase base confidence for speculation and hedged-causality evidence strings.
+ * Keys match the `evidence` values pushed by findTriggerMatches().
+ * Lower values = weaker epistemic signal; higher values = stronger hallucination risk.
+ * File-private — not exported.
+ */
+const PHRASE_CONFIDENCE_BASE = {
+  may: 0.3,
+  'might be': 0.4,
+  'could be': 0.4,
+  maybe: 0.45,
+  'i assume': 0.5,
+  assume: 0.5,
+  'it seems': 0.55,
+  'seems like': 0.55,
+  'should be': 0.55,
+  probably: 0.65,
+  likely: 0.65,
+  'i think': 0.7,
+  'i believe': 0.7,
+  presumably: 0.7,
+  'should be (epistemic)': 0.75,
+  'because (hedged)': 0.45,
+};
+
+/**
+ * Per-category base confidence score, used when the matched evidence string
+ * does not appear in PHRASE_CONFIDENCE_BASE.
+ * File-private — not exported.
+ */
+const CATEGORY_BASE_SCORE = {
+  speculation_language: 0.6,
+  causality_language: 0.7,
+  pseudo_quantification: 0.55,
+  completeness_claim: 0.65,
+  evaluative_design_claim: 0.5,
+  internal_contradiction: 0.8,
+  unsupported_absence: 0.75,
+  ungrounded_behavioral_assertion: 0.7,
+};
+
+/**
+ * Compute an initial per-match confidence score (integer 0–100).
+ *
+ * Two factors contribute:
+ *   1. Pattern strength — looked up from PHRASE_CONFIDENCE_BASE, then
+ *      CATEGORY_BASE_SCORE, falling back to 0.5.
+ *   2. Evidence proximity — when a tracked character index is provided and
+ *      evidence markers are found within 150 chars, confidence is reduced
+ *      (the model cited evidence, so the claim may be grounded).
+ *
+ * Weights are read from `config.confidenceWeights`, falling back to
+ * DEFAULT_CONFIDENCE_WEIGHTS for any missing key.
+ *
+ * File-private — not exported.
+ *
+ * @param {string} matchStr - The matched evidence string (e.g. 'i think', 'probably').
+ * @param {string} kind - Detection category name.
+ * @param {string} haystack - The stripped haystack text used for detection.
+ * @param {number} idx - Character index of the match in haystack, or -1 when unknown.
+ * @param {object} config - Runtime config (from loadConfig()).
+ * @param {string} [rawText] - The original unstripped text. Defaults to haystack when omitted.
+ *   Pass rawText so that backtick-cited evidence (e.g. `error code 127`) stripped from haystack
+ *   is still found by the proximity check.
+ * @returns {number} Integer in [0, 100].
+ */
+function computeConfidence(matchStr, kind, haystack, idx, config, rawText = haystack) {
+  const cw =
+    config.confidenceWeights &&
+    typeof config.confidenceWeights === 'object' &&
+    !Array.isArray(config.confidenceWeights)
+      ? config.confidenceWeights
+      : {};
+  const weights = {
+    patternStrength:
+      typeof cw.patternStrength === 'number'
+        ? cw.patternStrength
+        : DEFAULT_CONFIDENCE_WEIGHTS.patternStrength,
+    evidenceProximity:
+      typeof cw.evidenceProximity === 'number'
+        ? cw.evidenceProximity
+        : DEFAULT_CONFIDENCE_WEIGHTS.evidenceProximity,
+    categoryStacking:
+      typeof cw.categoryStacking === 'number'
+        ? cw.categoryStacking
+        : DEFAULT_CONFIDENCE_WEIGHTS.categoryStacking,
+    contextDensity:
+      typeof cw.contextDensity === 'number'
+        ? cw.contextDensity
+        : DEFAULT_CONFIDENCE_WEIGHTS.contextDensity,
+  };
+
+  const patternScore = PHRASE_CONFIDENCE_BASE[matchStr] ?? CATEGORY_BASE_SCORE[kind] ?? 0.5;
+
+  // proximityScore: 0.0 when evidence is nearby (grounded), 1.0 otherwise.
+  // Skip proximity check when idx is unknown (-1).
+  const proximityScore = idx !== -1 && hasEvidenceNearby(haystack, idx, rawText) ? 0.0 : 1.0;
+
+  const rawScore =
+    patternScore * weights.patternStrength + proximityScore * weights.evidenceProximity;
+  return Math.min(100, Math.max(0, Math.round(rawScore * 100)));
+}
+
+/**
+ * Build sentence start/end position ranges from `text`.
+ * Used by recomputeStackingBonuses to map match offsets to sentences.
+ *
+ * @param {string} text
+ * @returns {Array<{start: number, end: number}>}
+ */
+function buildSentenceRanges(text) {
+  const ranges = [];
+  let lastEnd = 0;
+  for (const m of text.matchAll(/(?<=[.!?])\s+/g)) {
+    ranges.push({ start: lastEnd, end: m.index + 1 });
+    lastEnd = m.index + m[0].length;
+  }
+  if (lastEnd < text.length) {
+    ranges.push({ start: lastEnd, end: text.length });
+  }
+  return ranges;
+}
+
+/**
+ * Post-pass: apply category stacking bonuses in-place.
+ *
+ * Matches in sentences that contain multiple distinct detection categories
+ * receive an additive bonus proportional to the stacking factor:
+ *   1 category → 0.0,  2 → 0.4,  3 → 0.7,  4+ → 1.0
+ *
+ * Matches with offset -1 use full-response category diversity as input.
+ *
+ * Mutates rawMatches in place. File-private — not exported.
+ *
+ * @param {Array<{kind: string, evidence: string, confidence: number}>} rawMatches
+ * @param {number[]} rawMatchOffsets - Parallel array of character offsets (-1 when unknown).
+ * @param {string} haystack
+ * @param {object} config
+ */
+function recomputeStackingBonuses(rawMatches, rawMatchOffsets, haystack, config) {
+  if (rawMatches.length === 0) return;
+
+  const cw =
+    config.confidenceWeights &&
+    typeof config.confidenceWeights === 'object' &&
+    !Array.isArray(config.confidenceWeights)
+      ? config.confidenceWeights
+      : {};
+  const stackingWeight =
+    typeof cw.categoryStacking === 'number'
+      ? cw.categoryStacking
+      : DEFAULT_CONFIDENCE_WEIGHTS.categoryStacking;
+
+  /** Stacking factor: 0.0 / 0.4 / 0.7 / 1.0 */
+  function stackingFactor(distinctCount) {
+    if (distinctCount <= 1) return 0.0;
+    if (distinctCount === 2) return 0.4;
+    if (distinctCount === 3) return 0.7;
+    return 1.0;
+  }
+
+  const sentenceRanges = buildSentenceRanges(haystack);
+
+  /** Return the sentence index that contains `offset`, or -1. */
+  function sentenceIndexForOffset(offset) {
+    for (let i = 0; i < sentenceRanges.length; i++) {
+      if (offset >= sentenceRanges[i].start && offset < sentenceRanges[i].end) return i;
+    }
+    return -1;
+  }
+
+  // Map sentence index → Set of distinct kinds present in that sentence.
+  const sentenceKinds = new Map();
+  for (let i = 0; i < rawMatches.length; i++) {
+    const offset = rawMatchOffsets[i];
+    if (offset === -1) continue;
+    const si = sentenceIndexForOffset(offset);
+    if (si === -1) continue;
+    if (!sentenceKinds.has(si)) sentenceKinds.set(si, new Set());
+    sentenceKinds.get(si).add(rawMatches[i].kind);
+  }
+
+  // Full-response diversity for -1 offset matches.
+  const allKinds = new Set(rawMatches.map((m) => m.kind));
+  const globalFactor = stackingFactor(allKinds.size);
+
+  for (let i = 0; i < rawMatches.length; i++) {
+    const offset = rawMatchOffsets[i];
+    let factor;
+    if (offset === -1) {
+      factor = globalFactor;
+    } else {
+      const si = sentenceIndexForOffset(offset);
+      const kinds = si !== -1 ? sentenceKinds.get(si) : null;
+      factor = kinds ? stackingFactor(kinds.size) : 0.0;
+    }
+    const bonus = Math.round(factor * stackingWeight * 100);
+    rawMatches[i].confidence = Math.min(100, Math.max(0, rawMatches[i].confidence + bonus));
+  }
+}
+
+/**
+ * Map nearby-match count to a density factor.
+ * File-private — not exported.
+ *
+ * @param {number} nearbyCount
+ * @returns {number}
+ */
+function contextDensityFactor(nearbyCount) {
+  if (nearbyCount <= 0) return 0.0;
+  if (nearbyCount === 1) return 0.3;
+  if (nearbyCount === 2) return 0.6;
+  return 1.0;
+}
+
+/**
+ * Post-pass: apply context density bonuses in-place.
+ *
+ * Matches within 200 characters of other matches receive an additive bonus.
+ * Matches with offset -1 skip the density pass.
+ *
+ * Mutates rawMatches in place. File-private — not exported.
+ *
+ * @param {Array<{kind: string, evidence: string, confidence: number}>} rawMatches
+ * @param {number[]} rawMatchOffsets
+ * @param {object} config
+ */
+function applyDensityBonuses(rawMatches, rawMatchOffsets, config) {
+  if (rawMatches.length === 0) return;
+
+  const cw =
+    config.confidenceWeights &&
+    typeof config.confidenceWeights === 'object' &&
+    !Array.isArray(config.confidenceWeights)
+      ? config.confidenceWeights
+      : {};
+  const densityWeight =
+    typeof cw.contextDensity === 'number'
+      ? cw.contextDensity
+      : DEFAULT_CONFIDENCE_WEIGHTS.contextDensity;
+
+  for (let i = 0; i < rawMatches.length; i++) {
+    const thisOffset = rawMatchOffsets[i];
+    if (thisOffset === -1) continue; // skip untracked positions
+
+    let nearbyCount = 0;
+    for (let j = 0; j < rawMatchOffsets.length; j++) {
+      if (i === j) continue;
+      const other = rawMatchOffsets[j];
+      if (other !== -1 && Math.abs(other - thisOffset) <= 200) nearbyCount++;
+    }
+
+    const factor = contextDensityFactor(nearbyCount);
+    const bonus = Math.round(factor * densityWeight * 100);
+    rawMatches[i].confidence = Math.min(100, Math.max(0, rawMatches[i].confidence + bonus));
+  }
+}
+
 /**
  * Detects linguistic signals that suggest uncertainty, causal claims, uncited quantification, completeness assertions, or evaluative-design statements in the provided text.
  *
@@ -1160,10 +1429,12 @@ function hasToolUseInRecentEntries(entries, recentTurns = 2) {
  *   - `config.categories.<name>.replacePatterns` — when `true`, customPatterns replaces built-ins.
  *   - `config.allowlist` — array of strings/RegExps; any match whose evidence satisfies an entry is dropped.
  *   - `config.maxTriggersPerResponse` — upper bound on the number of returned matches.
- * @returns {Array<{kind: string, evidence: string}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, `evaluative_design_claim`, `internal_contradiction`, `unsupported_absence`, or `ungrounded_behavioral_assertion` (bare outcome claims: "it works", "fixed", "resolved", "done" without supporting evidence), and `evidence` is the matched snippet from the text.
+ * @returns {Array<{kind: string, evidence: string, confidence: number}>} An array of match objects where `kind` is one of: `speculation_language`, `causality_language`, `pseudo_quantification`, `completeness_claim`, `evaluative_design_claim`, `internal_contradiction`, `unsupported_absence`, or `ungrounded_behavioral_assertion` (bare outcome claims: "it works", "fixed", "resolved", "done" without supporting evidence), `evidence` is the matched snippet from the text, and `confidence` is an integer in [0, 100] indicating estimated hallucination risk.
  */
 function findTriggerMatches(text, config = {}) {
   const rawMatches = [];
+  // Parallel to rawMatches: character offset of each match in haystack, or -1 when untracked.
+  const rawMatchOffsets = [];
   const rawText = normalizeForScan(text);
   const haystack = stripLowSignalRegions(rawText);
   const lower = haystack.toLowerCase();
@@ -1214,10 +1485,14 @@ function findTriggerMatches(text, config = {}) {
         found = lower.includes(pattern.toLowerCase());
       }
       if (found) {
+        const ev = typeof evidence === 'string' ? evidence : String(pattern);
         rawMatches.push({
           kind: catName,
-          evidence: typeof evidence === 'string' ? evidence : String(pattern),
+          evidence: ev,
+          // Custom patterns have no tracked character position.
+          confidence: computeConfidence(ev, catName, haystack, -1, config, rawText),
         });
+        rawMatchOffsets.push(-1);
       }
     }
   }
@@ -1334,7 +1609,19 @@ function findTriggerMatches(text, config = {}) {
           // Suppress when the phrase appears within an explicit uncertainty enumeration —
           // the assistant is transparently disclosing what it does not know.
           if (isWithinUncertaintyEnumeration(haystack, idx)) continue;
-          matches.push({ kind: 'speculation_language', evidence: phrase });
+          matches.push({
+            kind: 'speculation_language',
+            evidence: phrase,
+            confidence: computeConfidence(
+              phrase,
+              'speculation_language',
+              haystack,
+              idx,
+              config,
+              rawText,
+            ),
+          });
+          rawMatchOffsets.push(idx);
           break; // one flag per phrase kind is sufficient
         }
       }
@@ -1364,7 +1651,20 @@ function findTriggerMatches(text, config = {}) {
           EPISTEMIC_SUBJECT_SHOULD.test(haystack) ||
           EPISTEMIC_THAT_SENTENCE_START.test(haystack)
         ) {
-          matches.push({ kind: 'speculation_language', evidence: 'should be (epistemic)' });
+          // No specific character offset — full-haystack regex test.
+          matches.push({
+            kind: 'speculation_language',
+            evidence: 'should be (epistemic)',
+            confidence: computeConfidence(
+              'should be (epistemic)',
+              'speculation_language',
+              haystack,
+              -1,
+              config,
+              rawText,
+            ),
+          });
+          rawMatchOffsets.push(-1);
         } else if (HYPOTHESIS_SHOULD.test(haystack)) {
           // suppressed — hypothesis framing
         } else if (INSTRUCTIONAL_SHOULD.test(haystack)) {
@@ -1375,7 +1675,19 @@ function findTriggerMatches(text, config = {}) {
           // Fallback: apply question check on first occurrence
           const idx = lower.indexOf('should be');
           if (!isIndexWithinQuestion(haystack, idx)) {
-            matches.push({ kind: 'speculation_language', evidence: 'should be' });
+            matches.push({
+              kind: 'speculation_language',
+              evidence: 'should be',
+              confidence: computeConfidence(
+                'should be',
+                'speculation_language',
+                haystack,
+                idx,
+                config,
+                rawText,
+              ),
+            });
+            rawMatchOffsets.push(idx);
           }
         }
       }
@@ -1463,7 +1775,20 @@ function findTriggerMatches(text, config = {}) {
           if (phrase === 'because') {
             // Hedged because: always flag regardless of evidence
             if (HEDGED_BECAUSE.test(haystack)) {
-              matches.push({ kind: 'causality_language', evidence: 'because (hedged)' });
+              matches.push({
+                kind: 'causality_language',
+                evidence: 'because (hedged)',
+                // idx is the current loop position for 'because' — use as approximate offset.
+                confidence: computeConfidence(
+                  'because (hedged)',
+                  'causality_language',
+                  haystack,
+                  idx,
+                  config,
+                  rawText,
+                ),
+              });
+              rawMatchOffsets.push(idx);
               break; // one flag per hedged-because pattern is sufficient
             }
             // "because of the <artifact>" — citing an existing artifact, not guessing
@@ -1492,7 +1817,19 @@ function findTriggerMatches(text, config = {}) {
             // Sentence-scoped code reference suppression: file path, function call,
             // line number, or backtick in the same sentence — grounded citation.
             if (hasSentenceCodeReference(rawText, idx)) continue;
-            matches.push({ kind: 'causality_language', evidence: phrase });
+            matches.push({
+              kind: 'causality_language',
+              evidence: phrase,
+              confidence: computeConfidence(
+                phrase,
+                'causality_language',
+                haystack,
+                idx,
+                config,
+                rawText,
+              ),
+            });
+            rawMatchOffsets.push(idx);
             continue;
           }
 
@@ -1500,7 +1837,19 @@ function findTriggerMatches(text, config = {}) {
           if (hasEvidenceNearby(haystack, idx, rawText)) continue;
           // Sentence-scoped code reference suppression for non-because phrases.
           if (hasSentenceCodeReference(rawText, idx)) continue;
-          matches.push({ kind: 'causality_language', evidence: phrase });
+          matches.push({
+            kind: 'causality_language',
+            evidence: phrase,
+            confidence: computeConfidence(
+              phrase,
+              'causality_language',
+              haystack,
+              idx,
+              config,
+              rawText,
+            ),
+          });
+          rawMatchOffsets.push(idx);
           break; // one flag per phrase kind is sufficient for non-because phrases
         }
       }
@@ -1527,7 +1876,19 @@ function findTriggerMatches(text, config = {}) {
           if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
           // Sentence-scoped code reference suppression for regex-matched causality patterns.
           if (hasSentenceCodeReference(rawText, m.index)) continue;
-          matches.push({ kind: 'causality_language', evidence: m[0].trim() });
+          matches.push({
+            kind: 'causality_language',
+            evidence: m[0].trim(),
+            confidence: computeConfidence(
+              m[0].trim(),
+              'causality_language',
+              haystack,
+              m.index,
+              config,
+              rawText,
+            ),
+          });
+          rawMatchOffsets.push(m.index);
           break;
         }
       }
@@ -1542,7 +1903,19 @@ function findTriggerMatches(text, config = {}) {
           if (hasEvidenceNearby(haystack, m.index, rawText)) continue;
           // Sentence-scoped code reference suppression for regex-matched causality patterns.
           if (hasSentenceCodeReference(rawText, m.index)) continue;
-          matches.push({ kind: 'causality_language', evidence: m[0].trim() });
+          matches.push({
+            kind: 'causality_language',
+            evidence: m[0].trim(),
+            confidence: computeConfidence(
+              m[0].trim(),
+              'causality_language',
+              haystack,
+              m.index,
+              config,
+              rawText,
+            ),
+          });
+          rawMatchOffsets.push(m.index);
           break;
         }
       }
@@ -1557,13 +1930,37 @@ function findTriggerMatches(text, config = {}) {
       const nOverTenRe = /\b(\d+(?:\.\d+)?)\s*\/\s*10\b/i;
       const m10 = haystack.match(nOverTenRe);
       if (m10 && isQualityScore(haystack, m10[0], m10.index)) {
-        matches.push({ kind: 'pseudo_quantification', evidence: m10[0] });
+        matches.push({
+          kind: 'pseudo_quantification',
+          evidence: m10[0],
+          confidence: computeConfidence(
+            m10[0],
+            'pseudo_quantification',
+            haystack,
+            m10.index,
+            config,
+            rawText,
+          ),
+        });
+        rawMatchOffsets.push(m10.index);
       }
 
       const percentRe = /\b\d{1,3}(?:\.\d+)?\s*%\b/i;
       const mp = haystack.match(percentRe);
       if (mp) {
-        matches.push({ kind: 'pseudo_quantification', evidence: mp[0] });
+        matches.push({
+          kind: 'pseudo_quantification',
+          evidence: mp[0],
+          confidence: computeConfidence(
+            mp[0],
+            'pseudo_quantification',
+            haystack,
+            mp.index,
+            config,
+            rawText,
+          ),
+        });
+        rawMatchOffsets.push(mp.index);
       }
     }
     runCustomPatterns('pseudo_quantification');
@@ -1612,7 +2009,19 @@ function findTriggerMatches(text, config = {}) {
       for (const phrase of completenessPhrases) {
         const idx = lower.indexOf(phrase);
         if (idx !== -1) {
-          matches.push({ kind: 'completeness_claim', evidence: phrase });
+          matches.push({
+            kind: 'completeness_claim',
+            evidence: phrase,
+            confidence: computeConfidence(
+              phrase,
+              'completeness_claim',
+              haystack,
+              idx,
+              config,
+              rawText,
+            ),
+          });
+          rawMatchOffsets.push(idx);
         }
       }
 
@@ -1634,7 +2043,19 @@ function findTriggerMatches(text, config = {}) {
           // Suppress negated participles after fully/completely (disclaimers, not overclaims)
           if (/^(?:fully|completely)\s/i.test(m[0]) && isNegatedParticiple(m[0], haystack, m.index))
             continue;
-          matches.push({ kind: 'completeness_claim', evidence: m[0].trim() });
+          matches.push({
+            kind: 'completeness_claim',
+            evidence: m[0].trim(),
+            confidence: computeConfidence(
+              m[0].trim(),
+              'completeness_claim',
+              haystack,
+              m.index,
+              config,
+              rawText,
+            ),
+          });
+          rawMatchOffsets.push(m.index);
           break;
         }
       }
@@ -1652,7 +2073,19 @@ function findTriggerMatches(text, config = {}) {
       EVALUATIVE_DESIGN_TELLS_GLOBAL.lastIndex = 0;
       for (const edcMatch of haystack.matchAll(EVALUATIVE_DESIGN_TELLS_GLOBAL)) {
         if (isIndexWithinQuestion(haystack, edcMatch.index)) continue;
-        matches.push({ kind: 'evaluative_design_claim', evidence: edcMatch[0].trim() });
+        matches.push({
+          kind: 'evaluative_design_claim',
+          evidence: edcMatch[0].trim(),
+          confidence: computeConfidence(
+            edcMatch[0].trim(),
+            'evaluative_design_claim',
+            haystack,
+            edcMatch.index,
+            config,
+            rawText,
+          ),
+        });
+        rawMatchOffsets.push(edcMatch.index);
       }
     }
     runCustomPatterns('evaluative_design_claim');
@@ -1662,7 +2095,19 @@ function findTriggerMatches(text, config = {}) {
   if (isCategoryEnabled('internal_contradiction')) {
     if (useBuiltIn('internal_contradiction')) {
       for (const m of detectInternalContradictions(rawText)) {
-        matches.push(m);
+        // detectInternalContradictions does not return character offsets; use -1.
+        matches.push({
+          ...m,
+          confidence: computeConfidence(
+            m.evidence ?? '',
+            'internal_contradiction',
+            haystack,
+            -1,
+            config,
+            rawText,
+          ),
+        });
+        rawMatchOffsets.push(-1);
       }
     }
     runCustomPatterns('internal_contradiction');
@@ -1680,7 +2125,19 @@ function findTriggerMatches(text, config = {}) {
         if (isNegatedParticiple(m[0], haystack, idx)) continue;
         if (isPrescriptiveAbsence(m[0], haystack, idx)) continue;
         if (isWithinVerifiedSection(haystack, idx)) continue;
-        matches.push({ kind: 'unsupported_absence', evidence: m[0].trim() });
+        matches.push({
+          kind: 'unsupported_absence',
+          evidence: m[0].trim(),
+          confidence: computeConfidence(
+            m[0].trim(),
+            'unsupported_absence',
+            haystack,
+            idx,
+            config,
+            rawText,
+          ),
+        });
+        rawMatchOffsets.push(idx);
       }
     }
     runCustomPatterns('unsupported_absence');
@@ -1722,12 +2179,28 @@ function findTriggerMatches(text, config = {}) {
               if (closingBracket !== -1 && closingBracket - idx < 60) continue;
             }
           }
-          matches.push({ kind: 'ungrounded_behavioral_assertion', evidence: m[0].trim() });
+          matches.push({
+            kind: 'ungrounded_behavioral_assertion',
+            evidence: m[0].trim(),
+            confidence: computeConfidence(
+              m[0].trim(),
+              'ungrounded_behavioral_assertion',
+              haystack,
+              idx,
+              config,
+              rawText,
+            ),
+          });
+          rawMatchOffsets.push(idx);
         }
       }
     }
     runCustomPatterns('ungrounded_behavioral_assertion');
   }
+
+  // Post-pass: category stacking and context density bonuses (mutate rawMatches in place).
+  recomputeStackingBonuses(rawMatches, rawMatchOffsets, haystack, config);
+  applyDensityBonuses(rawMatches, rawMatchOffsets, config);
 
   // Apply allowlist filter and maxTriggersPerResponse limit.
   const allowlist = Array.isArray(config.allowlist) ? config.allowlist : [];
@@ -2066,15 +2539,22 @@ function buildStructuralBlockReason(errors) {
 /**
  * Constructs a human-readable block reason from detected trigger matches.
  *
- * @param {Array<{kind: string, evidence: string}>} matches - Array of match objects; each must have a `kind` label and an `evidence` snippet used in the reason.
+ * @param {Array<{kind: string, evidence: string, confidence?: number}>} matches - Array of match objects; each must have a `kind` label and an `evidence` snippet used in the reason.
  * @param {Array<{sentence: string, index: number, total: number, aggregateScore: number, label: string}>} [sentenceScores] - Optional per-sentence scoring results from scoreText(). When provided, sentences labeled UNCERTAIN or HALLUCINATED are appended as a sentence-level analysis section.
+ * @param {object} [config] - Runtime config; `config.reportingThreshold` filters which matches appear in reason text.
  * @returns {string} A formatted block reason string suitable for the STOP hook output.
  */
-function buildBlockReason(matches, sentenceScores) {
+function buildBlockReason(matches, sentenceScores, config) {
+  const threshold = config?.reportingThreshold ?? 50;
+  const reportable = matches.filter((m) => (m.confidence ?? 0) >= threshold);
+  const displayMatches = reportable.length > 0 ? reportable : matches;
   const uniqueKinds = [...new Set(matches.map((m) => m.kind))];
-  const evidenceSnippets = matches
+  const evidenceSnippets = displayMatches
     .slice(0, 6)
-    .map((m) => `- ${m.kind}: \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``)
+    .map(
+      (m) =>
+        `- ${m.kind} (confidence: ${m.confidence ?? '?'}): \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``,
+    )
     .join('\n');
 
   const parts = [
@@ -2121,10 +2601,11 @@ function buildBlockReason(matches, sentenceScores) {
  * so the assistant can fix everything in a single rewrite.
  *
  * @param {Array<{code: string, claimId?: string, label?: string, message: string}>} errors
- * @param {Array<{kind: string, evidence: string}>} matches
+ * @param {Array<{kind: string, evidence: string, confidence?: number}>} matches
+ * @param {object} [config] - Runtime config; `config.reportingThreshold` filters which matches appear in reason text.
  * @returns {string}
  */
-function buildCombinedBlockReason(errors, matches) {
+function buildCombinedBlockReason(errors, matches, config) {
   const errorLines = errors
     .slice(0, 5)
     .map((e) => {
@@ -2135,9 +2616,15 @@ function buildCombinedBlockReason(errors, matches) {
     })
     .join('\n');
 
-  const matchLines = matches
+  const threshold = config?.reportingThreshold ?? 50;
+  const reportable = matches.filter((m) => (m.confidence ?? 0) >= threshold);
+  const displayMatches = reportable.length > 0 ? reportable : matches;
+  const matchLines = displayMatches
     .slice(0, 4)
-    .map((m) => `- ${m.kind}: \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``)
+    .map(
+      (m) =>
+        `- ${m.kind} (confidence: ${m.confidence ?? '?'}): \`${m.evidence.replace(/\s+/g, ' ').trim().replace(/`/g, "'")}\``,
+    )
     .join('\n');
 
   return [
@@ -2398,7 +2885,11 @@ function main() {
       wouldBlock,
       structuralErrorCount: structuralErrors.length,
       matchCount: activeTriggerMatches.length,
-      matches: activeTriggerMatches.map((m) => ({ kind: m.kind, evidence: m.evidence })),
+      matches: activeTriggerMatches.map((m) => ({
+        kind: m.kind,
+        evidence: m.evidence,
+        confidence: m.confidence,
+      })),
       sentenceScores,
       textLength: lastAssistantText.length,
       textHash: hashText(lastAssistantText),
@@ -2497,7 +2988,7 @@ function main() {
     });
     blockAndExit(
       sessionId,
-      buildCombinedBlockReason(structuralErrors, activeTriggerMatches),
+      buildCombinedBlockReason(structuralErrors, activeTriggerMatches, config),
       maxBlocks,
       { ...telemetryBase, event_type: 'structural_block' },
     );
@@ -2535,7 +3026,7 @@ function main() {
   });
   blockAndExit(
     sessionId,
-    buildBlockReason(activeTriggerMatches, sentenceScoresForBlock),
+    buildBlockReason(activeTriggerMatches, sentenceScoresForBlock, config),
     maxBlocks,
     { ...telemetryBase, event_type: 'block' },
   );
