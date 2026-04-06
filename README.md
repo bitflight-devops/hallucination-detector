@@ -95,6 +95,10 @@ Fetch and follow instructions from https://raw.githubusercontent.com/bitflight-d
 
 Start a new session in your chosen platform and write a response containing speculation (e.g., "this is probably caused by..."). The plugin should block the response and require evidence-first rewriting.
 
+## Documentation
+
+For detailed information about how the plugin works, its architecture, configuration, and internal detection mechanisms, see the [Architecture Reference](docs/architecture.md).
+
 ## The Problem
 
 LLMs like Claude are optimized during training to produce responses that _appear_ helpful and confident. This creates a systematic failure mode:
@@ -123,7 +127,7 @@ Behavioral instructions ("don't speculate") fail because:
 
 A Stop hook provides **structural enforcement** — Claude cannot complete a task while trigger language is present. This shifts from "please don't speculate" (ignorable) to "speculation blocks completion" (architectural constraint).
 
-## What Changes
+## What Gets Blocked
 
 With this plugin installed, Claude will be blocked from finishing if its response contains:
 
@@ -140,6 +144,8 @@ When blocked, Claude must rewrite using evidence-first language:
 - "I observed X in file Y at line Z"
 - "I don't know yet" / "I can check using my tools"
 - "After running command X, the output showed Y"
+
+For a complete list of detection categories and suppression rules, see the [Architecture Reference](docs/architecture.md).
 
 ## Usage
 
@@ -189,43 +195,12 @@ Claude: "I don't have enough information yet. Let me check:
         Next step: verify network connectivity and database status."
 ```
 
-## What Gets Flagged
-
-| Category     | Triggers                                          | Required Fix                                |
-| ------------ | ------------------------------------------------- | ------------------------------------------- |
-| Speculation  | "I think", "probably", "likely", "seems", "maybe" | State observation or "I don't know yet"     |
-| Causality    | "because", "due to", "caused by", "therefore"     | Cite specific evidence (file, line, output) |
-| Fake rigor   | "8/10", "70% improvement"                         | Show methodology or remove                  |
-| Completeness | "all files checked", "fully resolved"             | List what was actually inspected            |
-
-## What Doesn't Get Flagged
-
-The plugin avoids false positives by ignoring:
-
-- Code blocks and inline code (might contain example text)
-- Blockquotes (often quoting user or external sources)
-- Questions ("Should I do that now?" is fine)
-- Evidence-backed statements (nearby file references, error codes, quoted output)
-- Prescriptive "should be" (e.g., "the value should be `true`")
-- Temporal "since" (e.g., "since yesterday", "since version 2.0")
-- Enumerated lists (completeness claims following itemized lists)
-
 ## Trade-offs
 
 - Claude will be blocked if it falls into speculation patterns
 - Responses will be more verbose (evidence must be cited)
 - Claude may need 2-3 rewrites before a response passes
 - After 2 blocks in the same response cycle, the plugin allows completion to prevent infinite loops
-
-## How It Works
-
-The plugin installs a Stop hook that:
-
-1. Reads the conversation transcript when Claude attempts to stop
-2. Extracts the last assistant message (ignoring tool calls)
-3. Scans for trigger patterns in narrative text (skipping code blocks, quotes, questions)
-4. If triggers found, blocks with specific feedback on what to fix
-5. Maintains a per-session counter to prevent infinite blocking loops
 
 ## Updating
 
