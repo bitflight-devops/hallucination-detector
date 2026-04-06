@@ -1,7 +1,7 @@
 # Hallucination Detector
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.3.0-green.svg)](https://github.com/bitflight-devops/hallucination-detector/releases)
+[![Version](https://img.shields.io/badge/version-1.17.0-green.svg)](https://github.com/bitflight-devops/hallucination-detector/releases)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-blueviolet.svg)](https://github.com/bitflight-devops/hallucination-detector)
 [![Cursor](https://img.shields.io/badge/Cursor-compatible-orange.svg)](https://github.com/bitflight-devops/hallucination-detector)
 [![Codex](https://img.shields.io/badge/Codex-compatible-yellow.svg)](https://github.com/bitflight-devops/hallucination-detector)
@@ -13,14 +13,14 @@ Prevents Claude from finishing tasks with speculation, unverified claims, or inv
 
 ## Why Install This?
 
-Claude sometimes delivers responses that sound confident but contain:
+Claude regularly delivers responses that sound confident but contain:
 
 - Speculation disguised as diagnosis ("This is probably caused by...")
 - Invented causality without evidence ("The error occurs because...")
 - Fake quantification without methodology ("This improves performance by 70%")
 - Completeness overclaims without verification ("All files have been checked")
 
-These patterns are difficult to catch because they sound authoritative. This plugin forces Claude to ground its statements in actual observations before completing a task.
+These patterns are dangerous precisely because they sound authoritative — indistinguishable from real analysis. This plugin forces Claude to ground every claim in actual observations before it can complete a task.
 
 ## Installation
 
@@ -103,7 +103,7 @@ For detailed information about how the plugin works, its architecture, configura
 
 LLMs like Claude are optimized during training to produce responses that _appear_ helpful and confident. This creates a systematic failure mode:
 
-**Speculation as diagnosis** - When asked "why did X happen?", Claude draws on training patterns to generate plausible-sounding explanations. These explanations feel authoritative but may have no connection to the actual state of your system. Claude hasn't checked logs, read config files, or verified anything — it's pattern-matching from training data.
+**Speculation as diagnosis** - When asked "why did X happen?", Claude draws on training patterns to generate plausible-sounding explanations. These explanations feel authoritative but have no connection to the actual state of your system. Claude hasn't checked logs, read config files, or verified anything — it's pattern-matching from training data.
 
 **Invented causality** - Causal claims ("X because Y") require evidence showing the relationship. Claude often asserts causality based on what _typically_ causes similar symptoms, not what _actually_ caused this specific instance. The word "because" in Claude's output frequently signals unverified inference.
 
@@ -115,15 +115,15 @@ LLMs like Claude are optimized during training to produce responses that _appear
 
 When Claude's unverified speculation matches reality by chance, the problem is invisible. When it doesn't match, you've wasted time pursuing a false lead — or worse, made changes based on incorrect diagnosis.
 
-The cost compounds in agent workflows where sub-agents act on orchestrator hallucinations, or when hallucinated "facts" persist across sessions as assumed truth.
+The cost compounds in agent workflows: sub-agents act on orchestrator hallucinations, hallucinated "facts" persist across sessions as assumed truth, and the original error becomes impossible to trace.
 
 ### Why a Stop Hook
 
-Behavioral instructions ("don't speculate") fail because:
+Instructions alone don't work. Here's why:
 
-1. Claude's training optimization overrides instructions under completion pressure
+1. Claude's training optimization overrides behavioral instructions under completion pressure
 2. Speculation patterns are deeply embedded in how Claude learned to be "helpful"
-3. Self-assessment of speculation is unreliable (Claude doesn't recognize its own patterns)
+3. Claude cannot reliably self-assess speculation — it doesn't recognize its own patterns
 
 A Stop hook provides **structural enforcement** — Claude cannot complete a task while trigger language is present. This shifts from "please don't speculate" (ignorable) to "speculation blocks completion" (architectural constraint).
 
@@ -197,7 +197,9 @@ Claude: "I don't have enough information yet. Let me check:
 
 ## Trade-offs
 
-- Claude will be blocked if it falls into speculation patterns
+These are the expected behaviors — the mechanism working as designed:
+
+- Claude will be blocked when it falls into speculation patterns
 - Responses will be more verbose (evidence must be cited)
 - Claude may need 2-3 rewrites before a response passes
 - After 2 blocks in the same response cycle, the plugin allows completion to prevent infinite loops
