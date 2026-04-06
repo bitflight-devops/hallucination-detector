@@ -1,3 +1,10 @@
+## [1.17.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.16.1...v1.17.0) (2026-04-06)
+
+### Features
+
+- **db:** add confidence column to block_matches with idempotent migration ([6b75186](https://github.com/bitflight-devops/hallucination-detector/commit/6b7518632920f5405cb9ffa4b5c3d719e90c878d))
+- **detection:** confidence scoring (0-100) per trigger match ([#12](https://github.com/bitflight-devops/hallucination-detector/issues/12)) ([0ed1cc6](https://github.com/bitflight-devops/hallucination-detector/commit/0ed1cc6ab454815e995bac747b799fcee2d7f57c))
+
 ## [1.16.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.16.0...v1.16.1) (2026-04-05)
 
 ### Bug Fixes
