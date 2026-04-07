@@ -14,7 +14,7 @@
 'use strict';
 
 const fs = require('node:fs');
-const { DEFAULT_WEIGHTS } = require('./hallucination-config.cjs');
+const { DEFAULT_WEIGHTS } = require('./hallucination-config-defaults.cjs');
 
 // ---------------------------------------------------------------------------
 // Argument parsing

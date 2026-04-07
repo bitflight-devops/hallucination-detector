@@ -41,17 +41,31 @@ try {
 }
 
 const {
-  loadConfig,
-  loadWeights,
+  safeLoadConfig,
+  safeLoadWeights,
   DEFAULT_WEIGHTS,
   DEFAULT_THRESHOLDS,
   DEFAULT_CONFIDENCE_WEIGHTS,
-  isValidCategoryThreshold,
-} = require('./hallucination-config.cjs');
-const {
-  validateClaimStructure,
-  CLAIM_LABEL_ALTERNATION,
-} = require('./hallucination-claim-structure.cjs');
+} = require('./hallucination-config-safe.cjs');
+
+let _isValidCategoryThreshold = null;
+try {
+  ({
+    isValidCategoryThreshold: _isValidCategoryThreshold,
+  } = require('./hallucination-config-validate.cjs'));
+} catch {
+  /* validation unavailable — per-category thresholds will use global defaults */
+}
+const isValidCategoryThreshold = _isValidCategoryThreshold || (() => false);
+
+let _claim_structure = null;
+try {
+  _claim_structure = require('./hallucination-claim-structure.cjs');
+} catch {
+  /* claim structure analysis unavailable */
+}
+const validateClaimStructure = _claim_structure?.validateClaimStructure || null;
+const CLAIM_LABEL_ALTERNATION = _claim_structure?.CLAIM_LABEL_ALTERNATION || null;
 
 // =============================================================================
 // Telemetry
@@ -2306,7 +2320,7 @@ function getLabelForScore(score, thresholds) {
   return 'HALLUCINATED';
 }
 
-// loadWeights and loadConfig imported from ./hallucination-config.cjs
+// safeLoadWeights and safeLoadConfig imported from ./hallucination-config-safe.cjs
 
 /**
  * Score every sentence in a block of text.
@@ -2724,7 +2738,7 @@ function main() {
   // returns defaults — that is acceptable.
   const assistantMeta = getLastAssistantMeta(entries);
 
-  const config = loadConfig();
+  const config = safeLoadConfig();
   const maxBlocks = config.maxBlocksPerSession ?? 2;
 
   // Template validation: check for observation template blocks before structural
@@ -3162,9 +3176,9 @@ module.exports = {
   scoreSentence,
   aggregateWeightedScore,
   getLabelForScore,
-  // Re-exported from hallucination-config.cjs for backward compatibility
-  loadWeights,
-  loadConfig,
+  // Re-exported from hallucination-config-safe.cjs for backward compatibility
+  loadWeights: safeLoadWeights,
+  loadConfig: safeLoadConfig,
   scoreText,
   DEFAULT_WEIGHTS,
   DEFAULT_THRESHOLDS,
