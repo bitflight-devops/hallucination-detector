@@ -23,8 +23,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-
-const { loadConfig } = require('./hallucination-config.cjs');
+const { safeLoadConfig } = require('./hallucination-config-safe.cjs');
 
 // Base enforcement framing — language discipline rules and structured claim format.
 const _FRAMING_TEXT_BASE = `# Hallucination Prevention — Behavioral Framing
@@ -199,16 +198,12 @@ function main() {
   }
 
   let framingText = FRAMING_TEXT;
-  try {
-    const config = loadConfig();
-    if (config.introspect) {
-      const logPath =
-        config.introspectOutputPath ||
-        path.join(os.tmpdir(), 'hallucination-detector-introspect.jsonl');
-      framingText = buildIntrospectFramingText(logPath);
-    }
-  } catch {
-    // loadConfig failure is non-fatal — fall through to default enforcement framing
+  const config = safeLoadConfig();
+  if (config.introspect) {
+    const logPath =
+      config.introspectOutputPath ||
+      path.join(os.tmpdir(), 'hallucination-detector-introspect.jsonl');
+    framingText = buildIntrospectFramingText(logPath);
   }
 
   emitSessionStartContext(framingText);
