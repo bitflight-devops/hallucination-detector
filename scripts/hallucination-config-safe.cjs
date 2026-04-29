@@ -28,7 +28,10 @@ function safeLoadConfig(opts) {
   try {
     const { loadConfig } = require('./hallucination-config.cjs');
     return loadConfig(opts);
-  } catch {
+  } catch (err) {
+    process.stderr.write(
+      `[hallucination-detector] Config load error: ${err && err.message ? err.message : String(err)}; using default config\n`,
+    );
     let deepFreeze = (x) => x;
     try {
       ({ deepFreeze } = require('./hallucination-config-merge.cjs'));
@@ -58,7 +61,10 @@ function safeLoadWeights() {
   try {
     const { loadWeights } = require('./hallucination-config.cjs');
     return loadWeights();
-  } catch {
+  } catch (err) {
+    process.stderr.write(
+      `[hallucination-detector] Config load error: ${err && err.message ? err.message : String(err)}; using default weights\n`,
+    );
     return { ...DEFAULT_WEIGHTS };
   }
 }
