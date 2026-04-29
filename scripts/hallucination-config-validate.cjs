@@ -147,7 +147,8 @@ function validateConfig(obj, source) {
       for (const key of Object.keys(obj.weights)) {
         const val = obj.weights[key];
         if (typeof val !== 'number' || !Number.isFinite(val)) {
-          warn('weights.' + key, val, DEFAULT_WEIGHTS[key]);
+          const defaultVal = key in DEFAULT_WEIGHTS ? DEFAULT_WEIGHTS[key] : undefined;
+          warn('weights.' + key, val, defaultVal);
           delete obj.weights[key];
         }
       }

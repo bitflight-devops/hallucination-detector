@@ -81,13 +81,14 @@ function parseTomlValue(valStr) {
   if (!s) return null;
   // Quoted string
   if (s.startsWith('"') && s.endsWith('"')) {
-    // Double-quoted: apply escape decoding (collapse \\ first, then sequences)
-    return s
-      .slice(1, -1)
-      .replace(/\\\\/g, '\\')
-      .replace(/\\n/g, '\n')
-      .replace(/\\t/g, '\t')
-      .replace(/\\"/g, '"');
+    // Double-quoted: apply escape decoding in a single pass to avoid ordering issues.
+    // e.g. "\\n" → literal backslash + n (not newline).
+    return s.slice(1, -1).replace(/\\(\\|n|t|")/g, (_, c) => {
+      if (c === '\\') return '\\';
+      if (c === 'n') return '\n';
+      if (c === 't') return '\t';
+      return '"';
+    });
   }
   if (s.startsWith("'") && s.endsWith("'")) {
     // Single-quoted (literal): no escape processing
