@@ -1909,6 +1909,15 @@ function findTriggerMatches(text, config = {}) {
         }
       }
 
+      // Suppression boundary: NOMINALIZED_CAUSALITY[1] matches broad forms like
+      // "the cause of this/that/the …".  DEFINITIONAL_CAUSE_RE narrows that
+      // suppression to matches whose object is a recognized bare-plural abstract
+      // category noun (e.g. "errors", "failures", "false positives", "bugs",
+      // "issues") or a category-level "this pattern/behavior" phrase.
+      // Concrete specific references such as "this error" or "this failure" are
+      // intentionally NOT included in the suppression list: they name a
+      // particular instance rather than an abstract category, so the flag is
+      // preserved for those concrete causal claims.
       const DEFINITIONAL_CAUSE_RE =
         /\b(?:cause|reason|explanation|root\s+cause)\s+(?:of|for|behind)\s+(?:false\s+positives?|errors?|failures?|bugs?|issues?|this\s+(?:pattern|behavior|behaviour))\b/i;
       for (const re of NOMINALIZED_CAUSALITY) {
