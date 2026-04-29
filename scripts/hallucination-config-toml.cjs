@@ -80,13 +80,18 @@ function parseTomlValue(valStr) {
   const s = stripTomlInlineComment(valStr);
   if (!s) return null;
   // Quoted string
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+  if (s.startsWith('"') && s.endsWith('"')) {
+    // Double-quoted: apply escape decoding (collapse \\ first, then sequences)
     return s
       .slice(1, -1)
+      .replace(/\\\\/g, '\\')
       .replace(/\\n/g, '\n')
       .replace(/\\t/g, '\t')
-      .replace(/\\\\/g, '\\')
       .replace(/\\"/g, '"');
+  }
+  if (s.startsWith("'") && s.endsWith("'")) {
+    // Single-quoted (literal): no escape processing
+    return s.slice(1, -1);
   }
   if (s === 'true') return true;
   if (s === 'false') return false;
@@ -113,7 +118,7 @@ function parseTomlValue(valStr) {
  * @returns {object}
  */
 function parseTomlInlineTable(content) {
-  const table = {};
+  const table = Object.create(null);
   if (!content.trim()) return table;
   for (const pair of splitTopLevel(content.trim(), ',')) {
     const p = pair.trim();
@@ -134,7 +139,7 @@ function parseTomlInlineTable(content) {
  * @returns {object}
  */
 function parseToml(source) {
-  const result = {};
+  const result = Object.create(null);
   let current = result;
 
   for (const rawLine of source.split('\n')) {
@@ -151,7 +156,7 @@ function parseToml(source) {
       current = result;
       for (const part of parts) {
         if (typeof current[part] !== 'object' || current[part] === null) {
-          current[part] = {};
+          current[part] = Object.create(null);
         }
         current = current[part];
       }

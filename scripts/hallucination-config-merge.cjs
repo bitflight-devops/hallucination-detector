@@ -40,6 +40,7 @@ function mergeConfig(base, override) {
   const result = { ...base };
 
   for (const key of Object.keys(override)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     const overVal = override[key];
     const baseVal = base[key];
 
@@ -51,20 +52,28 @@ function mergeConfig(base, override) {
         typeof overVal === 'object' && overVal !== null && !Array.isArray(overVal) ? overVal : {};
       const merged = { ...baseCats };
       for (const catName of Object.keys(overCats)) {
+        if (catName === '__proto__' || catName === 'constructor' || catName === 'prototype')
+          continue;
         const baseCat = baseCats[catName] || {};
         const overCat = overCats[catName];
         if (typeof overCat !== 'object' || overCat === null) {
           merged[catName] = overCat;
           continue;
         }
-        const mergedCat = { ...baseCat, ...overCat };
-        // Concatenate customPatterns unless replacePatterns is true in the override.
-        if (
-          !overCat.replacePatterns &&
-          Array.isArray(baseCat.customPatterns) &&
-          Array.isArray(overCat.customPatterns)
-        ) {
-          mergedCat.customPatterns = [...baseCat.customPatterns, ...overCat.customPatterns];
+        // Extract customPatterns and replacePatterns before spreading to handle
+        // replacePatterns:true correctly even when overCat.customPatterns is absent.
+        const { customPatterns: basePatterns, ...baseCatRest } = baseCat;
+        const { customPatterns: overPatterns, replacePatterns, ...overCatRest } = overCat;
+        const mergedCat = { ...baseCatRest, ...overCatRest };
+        if (replacePatterns) {
+          mergedCat.customPatterns = overPatterns !== undefined ? overPatterns : [];
+          mergedCat.replacePatterns = true;
+        } else if (Array.isArray(basePatterns) && Array.isArray(overPatterns)) {
+          mergedCat.customPatterns = [...basePatterns, ...overPatterns];
+        } else if (Array.isArray(basePatterns)) {
+          mergedCat.customPatterns = basePatterns;
+        } else if (Array.isArray(overPatterns)) {
+          mergedCat.customPatterns = overPatterns;
         }
         merged[catName] = mergedCat;
       }

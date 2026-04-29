@@ -64,8 +64,10 @@ try {
 } catch {
   /* claim structure analysis unavailable */
 }
-const validateClaimStructure = _claim_structure?.validateClaimStructure || null;
-const CLAIM_LABEL_ALTERNATION = _claim_structure?.CLAIM_LABEL_ALTERNATION || null;
+const validateClaimStructure =
+  _claim_structure?.validateClaimStructure ||
+  (() => ({ structured: false, valid: true, claims: [], errors: [] }));
+const CLAIM_LABEL_ALTERNATION = _claim_structure?.CLAIM_LABEL_ALTERNATION || '';
 
 // =============================================================================
 // Telemetry
@@ -2429,9 +2431,10 @@ function emitJson(obj) {
  * @returns {string}
  */
 // Built from CLAIM_LABEL_ALTERNATION so adding a new label requires one edit.
-const LABELED_CLAIM_LINE_RE = new RegExp(
-  `^\\s*-?\\s*(?:\\[(?:${CLAIM_LABEL_ALTERNATION})\\])+\\[c\\d+\\].*`,
-);
+// Falls back to a never-match regex when the claim-structure module is unavailable.
+const LABELED_CLAIM_LINE_RE = CLAIM_LABEL_ALTERNATION
+  ? new RegExp(`^\\s*-?\\s*(?:\\[(?:${CLAIM_LABEL_ALTERNATION})\\])+\\[c\\d+\\].*`)
+  : /(?!)/;
 const METADATA_LINE_RE = /^\s+(?:Evidence|Basis|Missing|Contradicted by):\s*/i;
 
 function stripLabeledClaimLines(text) {

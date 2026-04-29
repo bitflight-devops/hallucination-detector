@@ -143,6 +143,14 @@ function validateConfig(obj, source) {
     if (typeof obj.weights !== 'object' || obj.weights === null || Array.isArray(obj.weights)) {
       warn('weights', obj.weights, DEFAULT_WEIGHTS);
       delete obj.weights;
+    } else {
+      for (const key of Object.keys(obj.weights)) {
+        const val = obj.weights[key];
+        if (typeof val !== 'number' || !Number.isFinite(val)) {
+          warn('weights.' + key, val, DEFAULT_WEIGHTS[key]);
+          delete obj.weights[key];
+        }
+      }
     }
   }
   // thresholds: { uncertain, hallucinated } both numbers in [0,1], uncertain <= hallucinated

@@ -2,6 +2,7 @@
 
 describe('hallucination-config-safe', () => {
   beforeEach(() => {
+    vi.doUnmock('../scripts/hallucination-config.cjs');
     vi.resetModules();
   });
 

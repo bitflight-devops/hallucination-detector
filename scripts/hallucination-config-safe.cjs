@@ -17,7 +17,6 @@ const {
   DEFAULT_CONFIDENCE_WEIGHTS,
   DEFAULT_CONFIG,
 } = require('./hallucination-config-defaults.cjs');
-const { deepFreeze } = require('./hallucination-config-merge.cjs');
 
 /**
  * Load config with guaranteed fallback to defaults.
@@ -30,6 +29,12 @@ function safeLoadConfig(opts) {
     const { loadConfig } = require('./hallucination-config.cjs');
     return loadConfig(opts);
   } catch {
+    let deepFreeze = (x) => x;
+    try {
+      ({ deepFreeze } = require('./hallucination-config-merge.cjs'));
+    } catch {
+      /* fallback: no-op identity */
+    }
     return deepFreeze({
       ...DEFAULT_CONFIG,
       weights: { ...DEFAULT_WEIGHTS },
