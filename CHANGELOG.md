@@ -1,3 +1,12 @@
+## [1.17.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.17.0...v1.17.1) (2026-04-29)
+
+### Bug Fixes
+
+- add stderr warnings on config load failure and bump Node min to >=22.6.0 ([44ba88f](https://github.com/bitflight-devops/hallucination-detector/commit/44ba88ffc04498b7599b802e86b9394a7c8b4516))
+- address reviewer feedback on safe defaults, proto pollution, TOML, and weight validation ([6dbf8ad](https://github.com/bitflight-devops/hallucination-detector/commit/6dbf8ad932ea26e65c023dc21d7791702b1a5612))
+- **biome:** apply optional-chain and JSON formatting fixes ([e4dcd8c](https://github.com/bitflight-devops/hallucination-detector/commit/e4dcd8c976848f521b6ecc3cd5a9eaf4b490386d))
+- single-pass TOML escape decoding and guard undefined DEFAULT_WEIGHTS key in warning ([eaa92d2](https://github.com/bitflight-devops/hallucination-detector/commit/eaa92d29264866ac894a92e734e059f121447ea8))
+
 ## [1.17.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.16.1...v1.17.0) (2026-04-06)
 
 ### Features
