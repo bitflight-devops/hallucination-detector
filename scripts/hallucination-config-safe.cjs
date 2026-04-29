@@ -30,7 +30,7 @@ function safeLoadConfig(opts) {
     return loadConfig(opts);
   } catch (err) {
     process.stderr.write(
-      `[hallucination-detector] Config load error: ${err && err.message ? err.message : String(err)}; using default config\n`,
+      `[hallucination-detector] Config load error: ${err?.message ? err.message : String(err)}; using default config\n`,
     );
     let deepFreeze = (x) => x;
     try {
@@ -63,7 +63,7 @@ function safeLoadWeights() {
     return loadWeights();
   } catch (err) {
     process.stderr.write(
-      `[hallucination-detector] Config load error: ${err && err.message ? err.message : String(err)}; using default weights\n`,
+      `[hallucination-detector] Config load error: ${err?.message ? err.message : String(err)}; using default weights\n`,
     );
     return { ...DEFAULT_WEIGHTS };
   }
