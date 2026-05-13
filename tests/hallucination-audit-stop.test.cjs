@@ -3912,6 +3912,35 @@ describe('template validation integration', () => {
       fs.unlinkSync(transcriptFile);
     }
   });
+
+  it('SubagentStop + monitorSubagents:true + invalid template — no block emitted', () => {
+    // Locks in the "SubagentStop never blocks" contract for the template-validation path.
+    const cfgPath = path.join(os.tmpdir(), `hd-tpl-subagent-cfg-${Date.now()}.json`);
+    fs.writeFileSync(cfgPath, JSON.stringify({ monitorSubagents: true }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
+    const transcriptFile = makeTempTranscript(
+      [
+        'TOOL RUN',
+        'Command: pnpm test',
+        'Observed: 42 tests passed',
+        // Scope is deliberately absent — this would block a Stop session
+        'Does not cover: integration tests',
+      ].join('\n'),
+    );
+    try {
+      const result = runHook({
+        transcript_path: transcriptFile,
+        session_id: `tpl-subagent-noblock-${Date.now()}`,
+        hook_event_name: 'SubagentStop',
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe('');
+    } finally {
+      fs.unlinkSync(transcriptFile);
+      fs.unlinkSync(cfgPath);
+      delete process.env.HALLUCINATION_DETECTOR_CONFIG;
+    }
+  });
 });
 
 // =============================================================================
