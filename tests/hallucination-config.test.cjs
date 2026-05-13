@@ -826,7 +826,7 @@ describe('loadConfig cascading priority', () => {
 });
 
 // =============================================================================
-// New DEFAULT_CONFIG fields — warnOnly, ignoreCategories, blockSubagents, blockUserSessions
+// New DEFAULT_CONFIG fields — warnOnly, ignoreCategories, blockSubagents, blockUserSessions, monitorSubagents
 // =============================================================================
 describe('DEFAULT_CONFIG new session-gating fields', () => {
   it('has warnOnly: false', () => {
@@ -836,6 +836,10 @@ describe('DEFAULT_CONFIG new session-gating fields', () => {
   it('has ignoreCategories: []', () => {
     expect(Array.isArray(DEFAULT_CONFIG.ignoreCategories)).toBe(true);
     expect(DEFAULT_CONFIG.ignoreCategories).toHaveLength(0);
+  });
+
+  it('has monitorSubagents: false', () => {
+    expect(DEFAULT_CONFIG.monitorSubagents).toBe(false);
   });
 
   it('has blockSubagents: false', () => {
@@ -1099,6 +1103,41 @@ describe('schema validation for new session-gating fields', () => {
     const config = loadConfig();
     expect(config.blockSubagents).toBe(false);
     expect(stderrOutput).toContain('blockSubagents');
+  });
+
+  it('valid blockSubagents: true emits deprecation warning and aliases monitorSubagents to true', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { blockSubagents: true } }),
+    );
+    const config = loadConfig();
+    expect(config.blockSubagents).toBe(true);
+    expect(config.monitorSubagents).toBe(true);
+    expect(stderrOutput).toContain('blockSubagents');
+    expect(stderrOutput).toContain('deprecated');
+  });
+
+  it('blockSubagents: true does not override explicit monitorSubagents: false', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({
+        'hallucination-detector': { blockSubagents: true, monitorSubagents: false },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.monitorSubagents).toBe(false);
+    expect(stderrOutput).toContain('blockSubagents');
+    expect(stderrOutput).toContain('deprecated');
+  });
+
+  it('invalid monitorSubagents falls back to false with a stderr warning', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'project.json'),
+      JSON.stringify({ 'hallucination-detector': { monitorSubagents: 1 } }),
+    );
+    const config = loadConfig();
+    expect(config.monitorSubagents).toBe(false);
+    expect(stderrOutput).toContain('monitorSubagents');
   });
 
   it('invalid blockUserSessions falls back to true with a stderr warning', () => {

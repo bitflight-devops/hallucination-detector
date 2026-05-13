@@ -2693,6 +2693,17 @@ function main() {
     process.exit(0);
   }
 
+  // Load config early — the monitorSubagents gate below needs it before any I/O.
+  const config = safeLoadConfig();
+  const maxBlocks = config.maxBlocksPerSession ?? 2;
+
+  // monitorSubagents opt-in gate: SubagentStop events are not processed by default.
+  // Placed here (before any transcript I/O) so unmonitored subagent invocations
+  // exit immediately — no detection, no telemetry, and no block.
+  if (hookEventName === 'SubagentStop' && !config.monitorSubagents) {
+    process.exit(0);
+  }
+
   // Compact agent exemption: sessions whose first human message is a compaction
   // directive are exempted from all detection. Compact agents summarize prior
   // conversation content verbatim — they cannot avoid flagged phrases that
@@ -2750,9 +2761,6 @@ function main() {
   // returns defaults — that is acceptable.
   const assistantMeta = getLastAssistantMeta(entries);
 
-  const config = safeLoadConfig();
-  const maxBlocks = config.maxBlocksPerSession ?? 2;
-
   // Template validation: check for observation template blocks before structural
   // validation. Runs only when the session has not yet exceeded the block limit —
   // once fail-open fires, we skip all validation to avoid infinite loops.
@@ -2782,7 +2790,11 @@ function main() {
       permission_mode: permissionMode,
       hook_event_name: hookEventName,
     });
-    process.stdout.write(`${JSON.stringify({ decision: 'block', reason })}\n`);
+    // Blocking is always suppressed for subagent sessions — only emit the block
+    // decision for user-facing Stop events.
+    if (hookEventName !== 'SubagentStop') {
+      process.stdout.write(`${JSON.stringify({ decision: 'block', reason })}\n`);
+    }
     process.exit(0);
   }
 
@@ -2927,8 +2939,10 @@ function main() {
 
   // blockSubagents / blockUserSessions: check whether this session type should be blocked.
   // SubagentStop events fire on subagent sessions; Stop fires on user-facing sessions.
+  // When monitorSubagents: true, subagent detection runs but blocking is always suppressed —
+  // the "never block" constraint applies regardless of blockSubagents.
   const isSubagentSession = hookEventName === 'SubagentStop';
-  const sessionTypeBlocked = isSubagentSession ? config.blockSubagents : config.blockUserSessions;
+  const sessionTypeBlocked = isSubagentSession ? false : config.blockUserSessions;
   if (!sessionTypeBlocked) {
     writeTelemetry({ ...telemetryBase, event_type: 'skipped_config' });
     writeStopHookLog({
