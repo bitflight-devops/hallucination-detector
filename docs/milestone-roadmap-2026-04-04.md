@@ -201,6 +201,8 @@ Two bugs with no shadow mode requirement — both were straightforward correctne
 
 **Hook schema improvements:** Timeouts added to hook declarations; `SubagentStop` event type supported; matcher-level refinements.
 
+> **Updated (feat/stop-hook-subagent-opt-in):** `SubagentStop` processing is now opt-in via `monitorSubagents: true` (default: `false`). When `monitorSubagents` is absent or false, the hook exits immediately before running any detection — no telemetry, no block, minimal overhead on subagent sessions. When `monitorSubagents: true`, detection runs and telemetry is written, but blocking is always suppressed for subagent sessions. The previous `blockSubagents` key is deprecated; `blockSubagents: true` is aliased to `monitorSubagents: true` for backward compatibility.
+
 **Expected impact:**
 
 - `may` blocks: 79 → <10

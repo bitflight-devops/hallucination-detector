@@ -114,9 +114,24 @@ function validateConfig(obj, source) {
     warn('warnOnly', obj.warnOnly, false);
     delete obj.warnOnly;
   }
-  if ('blockSubagents' in obj && typeof obj.blockSubagents !== 'boolean') {
-    warn('blockSubagents', obj.blockSubagents, false);
-    delete obj.blockSubagents;
+  if ('monitorSubagents' in obj && typeof obj.monitorSubagents !== 'boolean') {
+    warn('monitorSubagents', obj.monitorSubagents, false);
+    delete obj.monitorSubagents;
+  }
+  if ('blockSubagents' in obj) {
+    if (typeof obj.blockSubagents !== 'boolean') {
+      warn('blockSubagents', obj.blockSubagents, false);
+      delete obj.blockSubagents;
+    } else {
+      // blockSubagents is deprecated. blockSubagents: true is aliased to monitorSubagents: true
+      // for backward compatibility. Blocking is always suppressed for subagent sessions.
+      process.stderr.write(
+        `[hallucination-detector] blockSubagents (from ${src}) is deprecated; use monitorSubagents instead. Note: blocking is always suppressed for subagent sessions.\n`,
+      );
+      if (obj.blockSubagents === true && !('monitorSubagents' in obj)) {
+        obj.monitorSubagents = true;
+      }
+    }
   }
   if ('blockUserSessions' in obj && typeof obj.blockUserSessions !== 'boolean') {
     warn('blockUserSessions', obj.blockUserSessions, true);

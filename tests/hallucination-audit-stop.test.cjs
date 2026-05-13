@@ -3441,9 +3441,9 @@ describe('SubagentStop hook_event_name handling', () => {
     transcriptPath = undefined;
   });
 
-  it('allows through when hook_event_name is SubagentStop (blockSubagents defaults to false)', () => {
-    // blockSubagents defaults to false — subagent sessions are not blocked by default
-    // because they legitimately contain speculative planning/reasoning text.
+  it('exits early (no detection) when hook_event_name is SubagentStop and monitorSubagents defaults to false', () => {
+    // monitorSubagents defaults to false — subagent sessions are skipped entirely
+    // (early exit before any detection) to avoid unnecessary overhead.
     const assistantText = 'I think this is probably the right approach.';
     transcriptPath = makeTempTranscript(assistantText);
 
@@ -3457,7 +3457,7 @@ describe('SubagentStop hook_event_name handling', () => {
     expect(stdout.trim()).toBe('');
   });
 
-  it('allows through when hook_event_name is SubagentStop and text is clean', () => {
+  it('exits early (no detection) when hook_event_name is SubagentStop and text is clean', () => {
     const assistantText = 'The fix has been applied. All three files were updated.';
     transcriptPath = makeTempTranscript(assistantText);
 
@@ -3484,6 +3484,47 @@ describe('SubagentStop hook_event_name handling', () => {
 
     expect(status).toBe(0);
     expect(stdout.trim()).toBe('');
+  });
+
+  it('monitorSubagents: true — runs detection but does not block even with trigger phrases', () => {
+    const cfgPath = path.join(os.tmpdir(), `hd-monitor-subagent-cfg-${Date.now()}.json`);
+    fs.writeFileSync(cfgPath, JSON.stringify({ monitorSubagents: true }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
+
+    const assistantText = 'I think this is probably the right approach.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout, status } = runHook({
+      session_id: `test-monitor-subagent-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'SubagentStop',
+    });
+
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+    fs.unlinkSync(cfgPath);
+  });
+
+  it('monitorSubagents: true + blockSubagents: true — detection runs but no block issued', () => {
+    // "even then should not block" — blocking is always suppressed for subagent sessions
+    const cfgPath = path.join(os.tmpdir(), `hd-monitor-block-cfg-${Date.now()}.json`);
+    fs.writeFileSync(cfgPath, JSON.stringify({ monitorSubagents: true, blockSubagents: true }));
+    process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
+
+    const assistantText = 'I think this is probably the right approach.';
+    transcriptPath = makeTempTranscript(assistantText);
+
+    const { stdout, status } = runHook({
+      session_id: `test-monitor-block-subagent-${Date.now()}`,
+      transcript_path: transcriptPath,
+      stop_hook_active: false,
+      hook_event_name: 'SubagentStop',
+    });
+
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
+    fs.unlinkSync(cfgPath);
   });
 });
 
@@ -4750,9 +4791,8 @@ describe('config-driven gating', () => {
     fs.unlinkSync(cfgPath);
   });
 
-  it('blockSubagents=false: SubagentStop with trigger phrase emits no block', () => {
-    // Default is false — already tested by the SubagentStop suite. This test makes
-    // the config explicit to document the contract clearly.
+  it('blockSubagents=false: SubagentStop with trigger phrase exits early (no detection, no block)', () => {
+    // blockSubagents: false + monitorSubagents defaults to false → early exit before detection.
     const cfgPath = path.join(os.tmpdir(), `hd-subagent-cfg-${Date.now()}.json`);
     fs.writeFileSync(cfgPath, JSON.stringify({ blockSubagents: false }));
     process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
@@ -4772,7 +4812,9 @@ describe('config-driven gating', () => {
     fs.unlinkSync(cfgPath);
   });
 
-  it('blockSubagents=true: SubagentStop with trigger phrase emits a block', () => {
+  it('blockSubagents=true: SubagentStop with trigger phrase runs detection but emits no block', () => {
+    // blockSubagents: true is deprecated and aliased to monitorSubagents: true.
+    // Blocking is always suppressed for subagent sessions — "even then should not block".
     const cfgPath = path.join(os.tmpdir(), `hd-subagent-on-cfg-${Date.now()}.json`);
     fs.writeFileSync(cfgPath, JSON.stringify({ blockSubagents: true }));
     process.env.HALLUCINATION_DETECTOR_CONFIG = cfgPath;
@@ -4780,17 +4822,15 @@ describe('config-driven gating', () => {
     const assistantText = 'I think this is probably correct.';
     transcriptPath = makeTempTranscript(assistantText);
 
-    const { stdout } = runHook({
+    const { stdout, status } = runHook({
       session_id: `test-blocksubagent-on-${Date.now()}`,
       transcript_path: transcriptPath,
       stop_hook_active: false,
       hook_event_name: 'SubagentStop',
     });
 
-    const trimmed = stdout.trim();
-    expect(trimmed.length).toBeGreaterThan(0);
-    const parsed = JSON.parse(trimmed);
-    expect(parsed.decision).toBe('block');
+    expect(status).toBe(0);
+    expect(stdout.trim()).toBe('');
     fs.unlinkSync(cfgPath);
   });
 

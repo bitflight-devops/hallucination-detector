@@ -81,7 +81,8 @@ const DEFAULT_CONFIG = {
   // Session-type gating
   warnOnly: false, // log telemetry but never emit a block to stdout
   ignoreCategories: [], // category names skipped entirely (still written to telemetry with was_ignored=1)
-  blockSubagents: false, // block when hook_event_name is SubagentStop
+  monitorSubagents: false, // opt-in: run detection on SubagentStop events (blocking is always suppressed for subagents)
+  blockSubagents: false, // deprecated: use monitorSubagents instead; blocking is always suppressed for subagent sessions
   blockUserSessions: true, // block when hook_event_name is Stop (user-facing session)
   // Confidence scoring
   confidenceWeights: DEFAULT_CONFIDENCE_WEIGHTS,

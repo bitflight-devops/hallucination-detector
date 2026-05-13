@@ -2753,6 +2753,14 @@ function main() {
   const config = safeLoadConfig();
   const maxBlocks = config.maxBlocksPerSession ?? 2;
 
+  // monitorSubagents opt-in gate: SubagentStop events are not processed by default.
+  // When monitorSubagents is false (the default), exit immediately — no detection,
+  // no telemetry, and no block. This avoids unnecessary overhead on subagent sessions
+  // that the user has not opted in to monitoring.
+  if (hookEventName === 'SubagentStop' && !config.monitorSubagents) {
+    process.exit(0);
+  }
+
   // Template validation: check for observation template blocks before structural
   // validation. Runs only when the session has not yet exceeded the block limit —
   // once fail-open fires, we skip all validation to avoid infinite loops.
@@ -2927,8 +2935,10 @@ function main() {
 
   // blockSubagents / blockUserSessions: check whether this session type should be blocked.
   // SubagentStop events fire on subagent sessions; Stop fires on user-facing sessions.
+  // When monitorSubagents: true, subagent detection runs but blocking is always suppressed —
+  // the "never block" constraint applies regardless of blockSubagents.
   const isSubagentSession = hookEventName === 'SubagentStop';
-  const sessionTypeBlocked = isSubagentSession ? config.blockSubagents : config.blockUserSessions;
+  const sessionTypeBlocked = isSubagentSession ? false : config.blockUserSessions;
   if (!sessionTypeBlocked) {
     writeTelemetry({ ...telemetryBase, event_type: 'skipped_config' });
     writeStopHookLog({
