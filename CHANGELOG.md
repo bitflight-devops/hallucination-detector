@@ -1,3 +1,9 @@
+## [1.18.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.18.0...v1.18.1) (2026-05-14)
+
+### Bug Fixes
+
+- **ci:** remove version: latest from ci.yml pnpm setup; format plugin JSON files ([780f7ca](https://github.com/bitflight-devops/hallucination-detector/commit/780f7ca169c9f75192e8694842e26c524351a49b))
+
 ## [1.18.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.17.1...v1.18.0) (2026-05-14)
 
 ### Features
