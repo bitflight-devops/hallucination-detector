@@ -1,3 +1,15 @@
+## [1.18.0](https://github.com/bitflight-devops/hallucination-detector/compare/v1.17.1...v1.18.0) (2026-05-14)
+
+### Features
+
+- add monitorSubagents opt-in gate for SubagentStop events ([d28e0c9](https://github.com/bitflight-devops/hallucination-detector/commit/d28e0c91e34f7c850bc9e99ab3c985c45cebefc4))
+
+### Bug Fixes
+
+- **ci:** pin pnpm to v10.17.1 to match lockfile generator ([51717ac](https://github.com/bitflight-devops/hallucination-detector/commit/51717ac0b972e4a7cece23f631ffdce514906747))
+- move SubagentStop gate before I/O; suppress template block for subagents; add template test ([30de18f](https://github.com/bitflight-devops/hallucination-detector/commit/30de18fba19b9b313c07340c6621f3fc6dd65c7d))
+- **session-start:** defer loadConfig require to inside main(); add copy-editing skill ([cee11ce](https://github.com/bitflight-devops/hallucination-detector/commit/cee11ce30abfc7d47ee48c1deb1d9e5063d22790))
+
 ## [1.17.1](https://github.com/bitflight-devops/hallucination-detector/compare/v1.17.0...v1.17.1) (2026-04-29)
 
 ### Bug Fixes
